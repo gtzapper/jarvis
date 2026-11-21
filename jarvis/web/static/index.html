@@ -352,6 +352,9 @@ async function scanProxmox() {
     const result = el("div", { class: "fhelp" });
     const user = el("input", { type: "text", value: g.user, style: "width:90px", title: "SSH user" });
     const name = el("input", { type: "text", value: g.suggested_name, style: "width:130px", title: "Name in Jarvis" });
+    const auth = el("select", { class: "select", style: "width:auto", title: "How Jarvis logs in" }, el("option", { value: "key" }, "SSH key"), el("option", { value: "password" }, "Password"));
+    const pass = el("input", { type: "password", placeholder: "Password", autocomplete: "new-password", style: "width:120px", hidden: true });
+    auth.onchange = () => { pass.hidden = auth.value !== "password"; if (!pass.hidden) pass.focus(); };
     let action;
     if (g.in_jarvis) action = el("span", { class: "pill ok" }, "In Jarvis: " + g.in_jarvis);
     else if (!g.supported) action = el("span", { class: "pill mute", title: g.note }, "Not supported");
@@ -360,13 +363,13 @@ async function scanProxmox() {
       const add = el("button", { class: "btn primary" }, "Add");
       add.onclick = async () => {
         add.disabled = true; result.className = "fhelp"; result.textContent = "Adding and testing SSH...";
-        const a = await api("/api/discover/add", { name: name.value, ip: g.ip, user: user.value, os: g.windows ? "windows" : "linux" });
+        const a = await api("/api/discover/add", { name: name.value, ip: g.ip, user: user.value, os: g.windows ? "windows" : "linux", auth: auth.value, password: pass.value });
         if (!a.ok) { result.className = "fhelp result bad"; result.textContent = a.error; add.disabled = false; return; }
         result.className = `fhelp result ${a.login_ok ? "ok" : "bad"}`;
         result.textContent = a.login_ok ? "Added. " + a.message : "Added, but login failed: " + a.message + (g.windows ? " (run the Windows setup steps below on this VM)" : " (add Jarvis's SSH key to this guest, or fix the user in Setup > VMs / servers)");
         add.replaceWith(el("span", { class: "pill ok" }, "Added"));
       };
-      action = el("div", { class: "row" }, name, user, add);
+      action = el("div", { class: "row" }, name, user, auth, pass, add);
     }
     const watch = el("input", { type: "checkbox", title: "Alert me if this guest stops" });
     watch.checked = g.must_run;
@@ -387,7 +390,7 @@ async function scanProxmox() {
     const box = el("pre", { class: "keybox", style: "white-space:pre-wrap" }, "Loading...");
     const copy = el("button", { class: "btn" }, "Copy");
     winHelp = el("details", { style: "margin-top:12px" }, el("summary", { style: "cursor:pointer;font-weight:600" }, "Windows VMs: turn on SSH first"),
-      el("p", { class: "help" }, "Jarvis talks to Windows over the built-in OpenSSH Server, with PowerShell. Run this in PowerShell as Administrator on each Windows VM, then click Add. The SSH user is an administrator account on that VM."),
+      el("p", { class: "help" }, "Jarvis talks to Windows over the built-in OpenSSH Server, with PowerShell. Run this in PowerShell as Administrator on each Windows VM, then click Add. The SSH user is an administrator account on that VM. Using password login instead? Only the first three lines are needed."),
       box, copy);
     api("/api/windows-setup").then(w => {
       box.textContent = w.ok ? w.snippet : w.error;

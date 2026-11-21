@@ -112,8 +112,10 @@ SSH_FIELDS = [
     Field("name", "Name", required=True, help="What you'll call it, e.g. docker-vm"),
     Field("host", "IP address", required=True),
     Field("user", "SSH user", default="jarvis"),
-    Field("key_file", "SSH private key", default="~/.ssh/jarvis_ed25519", help="Generate one in the SSH key box if you don't have it"),
-    Field("password_env", "Password (only if no key)", "secret", env="SSH_PASSWORD"),
+    Field("auth", "Login with", "choice", default="key", options=["key", "password"],
+          help="key = Jarvis's SSH key (recommended); password = the user's password"),
+    Field("key_file", "SSH private key (key login)", default="~/.ssh/jarvis_ed25519", help="Create one in the SSH key box if you don't have it"),
+    Field("password_env", "Password (password login)", "secret", env="SSH_PASSWORD"),
     Field("must_run_containers", "Containers that must always run", "list", help="Comma separated, e.g. plex, nextcloud"),
 ]
 
@@ -136,7 +138,9 @@ SERVICES: list[Service] = [
                     Field("ignore_interfaces", "Interfaces to ignore", "list", help="Enabled but unplugged ports, e.g. OPT2")]),
     Service("unraid", "Unraid", "Infrastructure", ("unraid",), multi=True, test=_t_ssh,
             help="Paste the Jarvis SSH public key into Unraid: Users > root > SSH authorized keys.",
-            fields=[f if f.key != "user" else Field("user", "SSH user", default="root") for f in SSH_FIELDS]
+            fields=[Field("user", "SSH user", default="root") if f.key == "user"
+                    else Field("password_env", "Password (password login)", "secret", env="UNRAID_PASSWORD") if f.key == "password_env"
+                    else f for f in SSH_FIELDS]
             + [Field("allow_commands", "Allow 'run ... on' commands (as root)", "bool", default=False)]),
     Service("linux_hosts", "VMs / servers (Linux or Windows)", "Infrastructure", ("linux_hosts",), multi=True, test=_t_ssh,
             help="Create a 'jarvis' user on the VM and add the Jarvis SSH public key to ~jarvis/.ssh/authorized_keys.",
@@ -408,7 +412,9 @@ def test(service_id: str, index: int = 0) -> str:
         return svc.test(cfg, items[index])
     except Exception as e:
         msg = str(e)
-        if "401" in msg or "403" in msg:
+        if "Authentication failed" in msg:
+            msg = "Login refused: wrong user/password, or Jarvis's key isn't on that machine"
+        elif "401" in msg or "403" in msg:
             msg += " (wrong key/password, or missing permission)"
         elif "timed out" in msg.lower() or "ConnectTimeout" in msg or "Max retries" in msg:
             msg = "Can't reach it. Check the IP/URL and port, and that it's running"

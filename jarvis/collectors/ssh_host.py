@@ -58,23 +58,48 @@ def parse_ini(lines: list[str]) -> dict[str, dict[str, str]]:
     return out
 
 
+def auth_method(cfg: dict) -> str:
+    """'key' or 'password'. Older configs without the setting: a password and no key file means password."""
+    if cfg.get("auth") in ("key", "password"):
+        return cfg["auth"]
+    return "password" if cfg.get("password_env") and not cfg.get("key_file") else "key"
+
+
 def connect(cfg: dict) -> paramiko.SSHClient:
+    user = cfg.get("user", "root")
+    if auth_method(cfg) == "password":
+        password = env(cfg.get("password_env"))
+        if not password:
+            raise ValueError(f"{cfg['name']} logs in with a password, but none is saved. Enter it in Setup")
+        login = {"password": password, "key_filename": None}
+    else:
+        key = Path(cfg.get("key_file") or "~/.ssh/jarvis_ed25519").expanduser()
+        if not key.exists():
+            raise ValueError(f"Jarvis's SSH key ({key}) doesn't exist yet. Create it in Setup > Jarvis's SSH key, "
+                             "or switch this host to password login")
+        login = {"password": None, "key_filename": str(key)}
+
     c = paramiko.SSHClient()
     KNOWN_HOSTS.parent.mkdir(exist_ok=True)
     if KNOWN_HOSTS.exists():
         c.load_host_keys(str(KNOWN_HOSTS))
     # Trust on first use: the key is saved and any later change raises BadHostKeyException.
     c.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-    key_file = cfg.get("key_file")
-    c.connect(
-        cfg["host"],
-        port=cfg.get("port", 22),
-        username=cfg.get("user", "root"),
-        key_filename=str(Path(key_file).expanduser()) if key_file else None,
-        password=env(cfg.get("password_env")),
-        timeout=10,
-        look_for_keys=not key_file,
-    )
+    try:
+        # Only the method chosen for this host: no stray keys from ~/.ssh or an SSH agent.
+        c.connect(cfg["host"], port=cfg.get("port", 22), username=user, timeout=10,
+                  look_for_keys=False, allow_agent=False, **login)
+    except paramiko.AuthenticationException:
+        c.close()
+        if login["password"]:
+            raise PermissionError(f"{cfg['host']} refused the login: wrong user ({user}) or password, "
+                                  "or the machine doesn't allow password logins")
+        raise PermissionError(f"{cfg['host']} refused the login for {user}: Jarvis's SSH key isn't in that user's "
+                              "authorized keys (or use password login)")
+    except paramiko.BadHostKeyException:
+        c.close()
+        raise PermissionError(f"{cfg['host']}'s SSH identity changed since Jarvis first connected. If you rebuilt that "
+                              "machine, remove its line from data/known_hosts; otherwise something may be impersonating it")
     c.save_host_keys(str(KNOWN_HOSTS))
     return c
 

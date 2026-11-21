@@ -132,9 +132,15 @@ class Discovery:
 
 
 def add_guest(name: str, ip: str, user: str, key_file: str = "~/.ssh/jarvis_ed25519",
-              os_type: str = "linux") -> tuple[int, str, bool]:
+              os_type: str = "linux", auth: str = "key", password: str = "") -> tuple[int, str, bool]:
     """Add a discovered guest as a host and try logging in. Returns (index, test message, ok)."""
-    idx = S.save("linux_hosts", {"name": name, "host": ip, "user": user or "root", "key_file": key_file,
+    use_password = auth == "password"
+    if use_password and not password:
+        raise ValueError("Enter the password for password login")
+    idx = S.save("linux_hosts", {"name": name, "host": ip, "user": user or "root",
+                                 "auth": "password" if use_password else "key",
+                                 "key_file": "" if use_password else key_file,
+                                 "password_env": password if use_password else "",
                                  "os": "windows" if os_type == "windows" else "linux",
                                  "allow_commands": True, "command_timeout": 120})
     try:

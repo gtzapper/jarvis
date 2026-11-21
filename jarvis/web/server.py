@@ -307,7 +307,8 @@ def create_app(state: State, password: str | None) -> Flask:
         from ..discovery import add_guest
         b = request.json or {}
         try:
-            idx, message, ok = add_guest(b.get("name", ""), b.get("ip", ""), b.get("user", "root"), os_type=b.get("os", "linux"))
+            idx, message, ok = add_guest(b.get("name", ""), b.get("ip", ""), b.get("user", "root"), os_type=b.get("os", "linux"),
+                                         auth=b.get("auth", "key"), password=b.get("password", ""))
         except ValueError as e:
             return jsonify(ok=False, error=str(e)), 400
         state.reload()

@@ -147,6 +147,13 @@ ssh-keygen -t ed25519 -f %USERPROFILE%\.ssh\jarvis_ed25519 -N ""
 
 Jarvis only runs read-only commands (`/proc`, `df`, `docker ps`, `systemctl --failed`, Unraid's status files). Host keys are pinned in `data/known_hosts` on first connect.
 
+**Password login instead of a key:** set "Login with" to `password` on a host in Setup, or pick Password next to Add in the discovered list, and enter the user's password. It's saved in `.env` like every other secret and never shown again. Keys are still recommended:
+- A password sits in a file that Jarvis can read.
+- Many Linux cloud images turn password SSH off. `PasswordAuthentication no` in `/etc/ssh/sshd_config` blocks it.
+- `sudo` commands from `run ... on` won't be able to prompt for a password. Use root, or give the user passwordless sudo for what you need.
+
+Windows' OpenSSH Server allows password logins by default.
+
 ### 5. Media stack
 For each app you run, add its URL under `media:` in `config.yaml` and its key in `.env`. Leave out anything you don't use.
 - **Sonarr, Radarr, Lidarr, Prowlarr, Overseerr/Jellyseerr:** Settings → General → API Key.
