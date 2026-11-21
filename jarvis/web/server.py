@@ -292,6 +292,28 @@ def create_app(state: State, password: str | None) -> Flask:
         state.reload()
         return jsonify(ok=True)
 
+    @app.get("/api/update")
+    def update_status():
+        from .. import updater
+        try:
+            if request.args.get("check"):
+                return jsonify(ok=True, **updater.check())
+            return jsonify(ok=True, **updater.current(), in_docker=updater.IN_DOCKER)
+        except updater.UpdateError as e:
+            return jsonify(ok=False, error=str(e))
+
+    @app.post("/api/update")
+    def update_apply():
+        from .. import updater
+        action = (request.json or {}).get("action")
+        try:
+            result = updater.rollback() if action == "rollback" else updater.apply()
+        except updater.UpdateError as e:
+            return jsonify(ok=False, error=str(e))
+        changed = result.get("updated", action == "rollback")
+        restarting = changed and updater.restart_soon()
+        return jsonify(ok=True, restarting=restarting, **result)
+
     @app.post("/api/sshkey")
     def sshkey():
         pub, created = S.ensure_ssh_key()

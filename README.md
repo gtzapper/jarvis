@@ -35,50 +35,62 @@ While the dashboard runs, it also does the monitoring and sends alerts, so you d
 **Where settings go:** addresses and options go in `config.yaml`. Keys and passwords go in `.env` and are never sent back to the browser. Each save keeps the previous config as `config.yaml.bak`. You can still edit both files by hand; the sections below explain each service. `config.example.yaml` shows every option.
 
 ## Run it 24/7 in Docker
-One container runs everything: dashboard, monitoring, alerts, chat and AI. All of Jarvis's settings live in one mounted folder, `./config`, which holds `config.yaml`, `.env` (keys and passwords), `data/` and its SSH key. Rebuilding or updating the container never touches them.
+One container runs everything: dashboard, monitoring, alerts, chat and AI. The code is a git checkout on the host, mounted into the container, so **Jarvis can update itself from GitHub**. All of its settings live in `./config`: `config.yaml`, `.env` (keys and passwords), `data/` and its SSH key. Updates never touch them.
 
-**Where to run it:** a small Proxmox LXC or VM with Docker is best. If Jarvis runs on Unraid, it can't tell you when Unraid is down. Unraid works too (see below). Whichever host you choose must be able to reach your LAN: Proxmox, pfSense, the *arr apps and Ollama.
+**Where to run it:** a small Proxmox LXC or VM with Docker is best. If Jarvis runs on Unraid, it can't tell you when Unraid is down. Unraid works too. 1 CPU and 512 MB RAM is plenty, since the AI runs on your Ollama box.
 
-### 1. Copy Jarvis to the Docker host
-On this PC (PowerShell), pack the code, leaving out the local venv and your secrets:
+### Install
+On the Docker host, as root:
 ```
-tar -czf jarvis.tgz --exclude=.venv --exclude=data --exclude=config --exclude=__pycache__ --exclude=.env --exclude=config.yaml --exclude=config.yaml.bak -C "D:\Project X" .
-scp jarvis.tgz root@DOCKER-HOST:/opt/
+git clone https://github.com/gtzapper/jarvis.git /opt/jarvis && /opt/jarvis/install.sh
 ```
-
-### 2. Start it (on the Docker host)
+For a **private repo**, give it a GitHub token. Create a fine-grained token with read-only "Contents" access to just this repo:
 ```
-mkdir -p /opt/jarvis && tar -xzf /opt/jarvis.tgz -C /opt/jarvis && cd /opt/jarvis
-mkdir -p config && chown 1000:1000 config
-docker compose up -d --build
-docker logs jarvis
+GITHUB_TOKEN=github_pat_xxx bash -c 'git clone https://x-access-token:$GITHUB_TOKEN@github.com/gtzapper/jarvis.git /opt/jarvis && git -C /opt/jarvis remote set-url origin https://github.com/gtzapper/jarvis.git && /opt/jarvis/install.sh'
 ```
-The log shows your **dashboard password** once, on first start. Open `http://DOCKER-HOST:8765` and log in. Change the password any time in Setup → Web dashboard (restart the container afterwards).
+`install.sh` does the following:
+- Checks Docker, Compose and git.
+- Picks sensible defaults: `/opt/jarvis` and user 1000. On Unraid it uses `/mnt/user/appdata/jarvis` and user 99:100.
+- Takes your time zone from the host.
+- Saves the token so the in-app updater can pull too.
+- Builds and starts the container.
+- Prints the dashboard address and the **first-start password**.
 
-Set your time zone so alert and audit times are local, either in `docker-compose.yml` or with `TZ=Asia/Kolkata docker compose up -d`.
-
-### 3. Bring your existing settings (optional)
-To keep what you've already set up on this PC, copy it into the config folder **before** the first start (or stop the container first):
-```
-scp "D:\Project X\config.yaml" "D:\Project X\.env" root@DOCKER-HOST:/opt/jarvis/config/
-```
-Then run `chown -R 1000:1000 /opt/jarvis/config` on the host. If you made Jarvis's SSH key on this PC, copy `%USERPROFILE%\.ssh\jarvis_ed25519` and `.pub` to `/opt/jarvis/config/.ssh/`. Otherwise click **Create SSH key** in Setup and add the new key to your machines.
-
-### Proxmox LXC notes
-Docker inside an LXC needs nesting enabled. Set it in the container's Options → Features (`nesting=1`, plus `keyctl=1` for unprivileged containers). A small Debian VM avoids that question entirely. 1 CPU and 512 MB RAM is plenty, since the AI runs on your Ollama box.
-
-### Unraid
-Use the **Compose Manager** plugin:
-1. Copy the files to `/mnt/user/appdata/jarvis`.
-2. Create a stack pointing at it.
-3. Set `PUID=99` and `PGID=100` (Unraid's usual owner), and run `chown -R 99:100 /mnt/user/appdata/jarvis/config`.
+You can override the defaults: `JARVIS_DIR=/srv/jarvis JARVIS_PORT=9000 TZ=Asia/Kolkata ./install.sh`.
 
 ### Updating
-Copy the new code over (step 1, then re-extract into `/opt/jarvis`), then run:
+- **From the app:** go to Setup → **Jarvis version** → Check for updates. It lists what's new; click **Update now**. Jarvis pulls the changes, restarts itself and the page reloads on the new version. You can also just say `update jarvis` in Chat.
+- **From the host:**
+
+  | Command | What it does |
+  |---|---|
+  | `/opt/jarvis/update.sh` | Same as the button, with a prompt |
+  | `--yes` | Update without asking |
+  | `--rollback` | Go back to the previous version |
+  | `--rebuild` | Rebuild the Docker image |
+
+**Safety rules:**
+- **Fast-forward only.** If any file was edited by hand on the host, or the copy has diverged from GitHub, Jarvis refuses and tells you why. It never overwrites changes.
+- **Every update and rollback** is written to the Activity log.
+- **New dependencies** in an update are installed automatically on restart.
+- **Docker image changes** need a rebuild: if an update changes the `Dockerfile`, Jarvis says so; run `update.sh --rebuild`.
+- **If an update breaks the app**, run `update.sh --rollback` on the host. That works even when the dashboard won't load.
+
+### Bring your existing settings (optional)
+To keep what you set up on this PC, copy it into the host's config folder, then restart:
 ```
-docker compose up -d --build
+scp "D:\Project X\config.yaml" root@DOCKER-HOST:/opt/jarvis/config/
 ```
-Your `config/` folder is left alone.
+Then on the host:
+```
+chown -R 1000:1000 /opt/jarvis/config && docker restart jarvis
+```
+
+### Proxmox LXC notes
+Docker inside an LXC needs nesting. Turn it on in the container's Options → Features (`nesting=1`, plus `keyctl=1` for unprivileged containers). A small Debian VM avoids that question entirely.
+
+### Unraid
+Install the **Compose Manager** plugin first, then run the same install command from Unraid's terminal.
 
 ## Manual setup (what Setup does for you)
 

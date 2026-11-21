@@ -26,6 +26,10 @@ def main() -> None:
     do.add_argument("text", nargs="+")
     do.add_argument("--yes", action="store_true", help="don't ask for confirmation; pick the top search result")
     sub.add_parser("test-notify", help="send a test push notification")
+    up = sub.add_parser("update", help="update Jarvis from its git repo")
+    up.add_argument("--check", action="store_true", help="only show what's new")
+    up.add_argument("--yes", action="store_true", help="don't ask before updating")
+    up.add_argument("--rollback", action="store_true", help="go back to the version before the last update")
     su = sub.add_parser("setup", help="guided setup: asks for each service and tests it")
     su.add_argument("service", nargs="?", help="set up just one, e.g. sonarr")
     wb = sub.add_parser("web", help="open the dashboard in your browser")
@@ -34,6 +38,9 @@ def main() -> None:
     wb.add_argument("--no-monitor", action="store_true", help="don't run background checks")
     args = ap.parse_args()
 
+    if args.cmd == "update":
+        run_update(args)
+        return
     if args.cmd == "setup":
         from .wizard import run
         try:
@@ -85,6 +92,32 @@ def main() -> None:
         print(spoken_summary(reports))
     else:
         print_reports(reports)
+
+
+def run_update(args) -> None:
+    from . import updater
+    load_config(args.config, allow_missing=True)  # loads .env, for a private repo's token
+    try:
+        if args.rollback:
+            print(updater.rollback()["message"], "Restart Jarvis to use it.")
+            return
+        st = updater.check()
+        print(f"Installed: {st['commit']} ({st['date']}) {st['subject']}")
+        if not st["new"]:
+            print("Jarvis is up to date.")
+            return
+        print(f"{len(st['new'])} update(s) available on {st['upstream']}:")
+        for c in st["new"]:
+            print(f"  {c['commit']}  {c['date']}  {c['subject']}")
+        if args.check:
+            return
+        if not args.yes and input("Update now? [y/N] ").strip().lower() not in ("y", "yes"):
+            print("Okay, not updating.")
+            return
+        result = updater.apply()
+        print(result["message"], "Restart Jarvis to use the new version.")
+    except updater.UpdateError as e:
+        raise SystemExit(f"Update failed: {e}")
 
 
 def print_devices(cfg: dict, search: str | None) -> None:

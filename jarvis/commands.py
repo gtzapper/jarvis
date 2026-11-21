@@ -43,6 +43,7 @@ HELP = """Things I understand:
   run uptime on web1             run a shell command on a host (always asks first)
   create vm web1 [with 4 cores 8gb ram 64gb disk]   new VM from your template + static IP on pfSense
   check vm setup                 test the VM-creation permissions without changing anything
+  check for updates / update jarvis   see what's new on GitHub, install it and restart
   new chat                       start a fresh AI conversation
   help                           this list
 With the AI brain set up, you can also just say what you want in plain English."""
@@ -83,6 +84,8 @@ class Assistant:
             (r"^(run|exec|execute) (?P<cmd>.+?) on (?P<host>[\w.-]+)$", self.run),
             (r"^on (?P<host>[\w.-]+)[,:]? (run |exec |execute )?(?P<cmd>.+)$", self.run),
             (r"^check (vm|provisioning) setup$", self.check_vm_setup),
+            (r"^(check for updates?|any updates|what version( are you)?|version)$", self.check_updates),
+            (r"^(update|upgrade) (jarvis|yourself|the app)$", self.update_self),
             (r"^(create|make|build|spin up|new) (a )?(new )?vm (called |named )?(?P<name>[\w-]+)(?P<spec> .+)?$", self.create_vm),
             (r"^(media status|media)$", self.media_status),
             (r"^(status|how('s| is) (everything|the lab|it going))$", self.lab_status),
@@ -288,6 +291,35 @@ class Assistant:
         if len(lines) > 40:
             head += f" (last 40 of {len(lines)} lines)"
         return head + ("\n" + "\n".join(shown) if shown else ", no output")
+
+    # ------------------------------------------------------------ updating Jarvis
+
+    def check_updates(self, m) -> str:
+        from . import updater
+        try:
+            st = updater.check()
+        except updater.UpdateError as e:
+            return f"I couldn't check for updates: {e}"
+        head = f"I'm on {st['commit']} from {st['date']} ({st['subject']})."
+        if not st["new"]:
+            return head + " That's the latest."
+        lines = "\n".join(f"  {c['commit']} {c['date']} {c['subject']}" for c in st["new"][:15])
+        return f"{head}\n{len(st['new'])} update(s) available:\n{lines}\nSay 'update jarvis' to install."
+
+    def update_self(self, m) -> str:
+        from . import updater
+        try:
+            st = updater.check()
+            if not st["new"]:
+                return f"Already on the latest version ({st['commit']})."
+            if not self.confirm(f"Update Jarvis from {st['commit']} with {len(st['new'])} new change(s)? I'll restart afterwards."):
+                return "Okay, not updating."
+            result = updater.apply()
+        except updater.UpdateError as e:
+            return f"Update failed: {e}"
+        if updater.restart_soon(3):
+            return result["message"] + " Restarting now; I'll be back in a few seconds."
+        return result["message"] + " Restart Jarvis to use the new version."
 
     # ------------------------------------------------------------ VMs
 

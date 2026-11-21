@@ -3,13 +3,16 @@ services:
     build: .
     image: jarvis:latest
     container_name: jarvis
+    # Restarts after crashes and reboots, and after an in-app update (Jarvis exits so it comes back on the new code).
     restart: unless-stopped
-    # The user that owns ./config on the host. Unraid usually wants 99:100.
+    # The owner of this folder on the host (install.sh sets it). Unraid usually wants 99:100.
     user: "${PUID:-1000}:${PGID:-1000}"
     ports:
-      - "8765:8765"
+      - "${JARVIS_PORT:-8765}:8765"
     environment:
       TZ: "${TZ:-UTC}"   # e.g. Asia/Kolkata or Europe/London, so alert and audit times are local
     volumes:
-      # Jarvis's own config.yaml, .env (keys and passwords), data/ and .ssh/ key all live here.
+      # The git checkout itself: lets Jarvis update its own code from GitHub.
+      - .:/app
+      # Jarvis's config.yaml, .env (keys and passwords), data/ and .ssh/ key.
       - ./config:/config

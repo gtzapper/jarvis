@@ -203,6 +203,10 @@ SERVICES: list[Service] = [
     Service("notify", "Phone alerts (ntfy)", "Alerts", ("notify",), test=_t_notify,
             help="Install the ntfy app, subscribe to a long random topic, use https://ntfy.sh/<topic>.",
             fields=[Field("ntfy_url_env", "ntfy URL", "secret", env="NTFY_URL", required=True)]),
+    Service("updates", "Updates", "Alerts", ("updates",),
+            help="Jarvis updates itself from its GitHub repo (the button at the top of this page). For a private repo, create a "
+                 "fine-grained GitHub token with read-only 'Contents' access to that one repo and paste it here.",
+            fields=[Field("token_env", "GitHub token (private repos only)", "secret", env="JARVIS_GIT_TOKEN")]),
     Service("web", "Web dashboard", "Alerts", ("web",),
             help="Only needed to open the dashboard from other devices. Without a password it only listens on this PC.",
             fields=[Field("password_env", "Dashboard password", "secret", env="JARVIS_WEB_PASSWORD"),
