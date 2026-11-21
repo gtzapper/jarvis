@@ -311,7 +311,7 @@ def _coerce(f: Field, v):
             raise ValueError(f"{f.label} must be one of: {', '.join(f.options)}")
         return v
     if f.kind == "list":
-        items = [x.strip() for x in (v if isinstance(v, list) else str(v or "").split(",")) if str(x).strip()]
+        items = [str(x).strip() for x in (v if isinstance(v, list) else str(v or "").split(",")) if str(x).strip()]
         return [int(x) if str(x).isdigit() else x for x in items]
     return str(v).strip() if v is not None else ""
 

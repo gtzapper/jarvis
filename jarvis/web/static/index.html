@@ -156,6 +156,7 @@ select.select, input[type=text], input[type=password], input[type=number], input
       <p class="sub">Add your services here. Keys and passwords are saved to <code>.env</code> on this PC and are never shown again; leave a secret field blank to keep its current value.</p>
       <div class="card" id="versioncard" style="margin-bottom:12px"></div>
       <div class="card" id="sshcard"></div>
+      <div class="card" id="discovercard" style="margin-top:12px"></div>
       <div id="services"></div>
     </section>
   </main>
@@ -293,6 +294,7 @@ async function loadSetup() {
   const s = await api("/api/setup");
   renderSsh(s.ssh_public_key);
   loadVersion();
+  if (!$("#discovercard").dataset.loaded) renderDiscoverIntro();
   const groups = {};
   s.services.forEach(svc => (groups[svc.group] ||= []).push(svc));
   const open = new Set([...document.querySelectorAll("#services details[open]")].map(d => d.dataset.id));
@@ -334,6 +336,55 @@ async function applyUpdate(btn, result, action) {
     await new Promise(res => setTimeout(res, 2000));
   }
   result.className = "result bad"; result.textContent = "Jarvis hasn't come back after 2 minutes. Check: docker logs jarvis";
+}
+function renderDiscoverIntro() {
+  put($("#discovercard"), el("strong", {}, "Discovered on Proxmox"),
+    el("p", { class: "help", style: "margin:4px 0 10px" }, "Finds every VM and LXC, works out its IP (guest agent, Proxmox, or pfSense by MAC) and lets you add it so Jarvis can monitor it and run commands on it. Add Jarvis's SSH key (above) to a guest first so the login works."),
+    el("button", { class: "btn", onclick: scanProxmox }, "Scan Proxmox"));
+}
+async function scanProxmox() {
+  const card = $("#discovercard");
+  card.dataset.loaded = "1";
+  put(card, el("strong", {}, "Discovered on Proxmox"), el("p", { class: "help" }, "Scanning..."));
+  const r = await api("/api/discover");
+  if (!r.ok) { put(card, el("strong", {}, "Discovered on Proxmox"), el("p", { class: "result bad" }, r.error)); return; }
+  const rows = r.guests.map(g => {
+    const result = el("div", { class: "fhelp" });
+    const user = el("input", { type: "text", value: g.user, style: "width:90px", title: "SSH user" });
+    const name = el("input", { type: "text", value: g.suggested_name, style: "width:130px", title: "Name in Jarvis" });
+    let action;
+    if (g.in_jarvis) action = el("span", { class: "pill ok" }, "In Jarvis: " + g.in_jarvis);
+    else if (!g.supported) action = el("span", { class: "pill mute", title: g.note }, "Not supported");
+    else if (!g.ip) action = el("span", { class: "pill mute", title: g.note }, "No IP");
+    else {
+      const add = el("button", { class: "btn primary" }, "Add");
+      add.onclick = async () => {
+        add.disabled = true; result.className = "fhelp"; result.textContent = "Adding and testing SSH...";
+        const a = await api("/api/discover/add", { name: name.value, ip: g.ip, user: user.value });
+        if (!a.ok) { result.className = "fhelp result bad"; result.textContent = a.error; add.disabled = false; return; }
+        result.className = `fhelp result ${a.login_ok ? "ok" : "bad"}`;
+        result.textContent = a.login_ok ? "Added. " + a.message : "Added, but login failed: " + a.message + " (add Jarvis's SSH key to this guest, or fix the user in Setup > Linux VMs)";
+        add.replaceWith(el("span", { class: "pill ok" }, "Added"));
+      };
+      action = el("div", { class: "row" }, name, user, add);
+    }
+    const watch = el("input", { type: "checkbox", title: "Alert me if this guest stops" });
+    watch.checked = g.must_run;
+    watch.onchange = async () => {
+      const w = await api("/api/discover/must_run", { source: g.source, vmid: g.vmid, on: watch.checked });
+      if (!w.ok) { watch.checked = !watch.checked; result.className = "fhelp result bad"; result.textContent = w.error; }
+    };
+    return el("tr", {},
+      el("td", {}, String(g.vmid)), el("td", {}, el("div", {}, g.name), el("div", { class: "kind" }, `${g.type} on ${g.node}`)),
+      el("td", {}, el("span", { class: `pill ${g.status === "running" ? "ok" : "mute"}` }, g.status)),
+      el("td", {}, g.ip ? [el("div", {}, g.ip), el("div", { class: "kind" }, g.ip_from)] : el("span", { class: "kind", title: g.note }, "-")),
+      el("td", { style: "text-align:center" }, watch),
+      el("td", {}, action, result));
+  });
+  const addable = r.guests.filter(g => !g.in_jarvis && g.ip && g.supported).length;
+  put(card, el("div", { class: "row", style: "justify-content:space-between" }, el("strong", {}, "Discovered on Proxmox"), el("button", { class: "btn", onclick: scanProxmox }, "Scan again")),
+    el("p", { class: "help", style: "margin:4px 0 10px" }, `${r.guests.length} guests, ${addable} can be added. "Alert if stopped" warns you whenever that guest isn't running.`),
+    el("div", { class: "tablewrap" }, el("table", {}, el("thead", {}, el("tr", {}, ["ID", "Name", "Status", "IP", "Alert if stopped", ""].map(h => el("th", {}, h)))), el("tbody", {}, rows))));
 }
 function renderSsh(key) {
   const copy = el("button", { class: "btn", onclick: async () => { try { await navigator.clipboard.writeText(key); copy.textContent = "Copied"; } catch { copy.textContent = "Select and copy it manually"; } } }, "Copy");

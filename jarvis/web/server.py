@@ -292,6 +292,38 @@ def create_app(state: State, password: str | None) -> Flask:
         state.reload()
         return jsonify(ok=True)
 
+    @app.get("/api/discover")
+    def discover():
+        from ..discovery import Discovery
+        try:
+            with state.lock:
+                cfg = state.cfg
+            return jsonify(ok=True, guests=Discovery(cfg).scan())
+        except Exception as e:
+            return jsonify(ok=False, error=str(e))
+
+    @app.post("/api/discover/add")
+    def discover_add():
+        from ..discovery import add_guest
+        b = request.json or {}
+        try:
+            idx, message, ok = add_guest(b.get("name", ""), b.get("ip", ""), b.get("user", "root"))
+        except ValueError as e:
+            return jsonify(ok=False, error=str(e)), 400
+        state.reload()
+        return jsonify(ok=True, index=idx, login_ok=ok, message=message)
+
+    @app.post("/api/discover/must_run")
+    def discover_must_run():
+        from ..discovery import set_must_run
+        b = request.json or {}
+        try:
+            ids = set_must_run(b["source"], int(b["vmid"]), bool(b.get("on")))
+        except (ValueError, KeyError) as e:
+            return jsonify(ok=False, error=str(e)), 400
+        state.reload()
+        return jsonify(ok=True, must_run=ids)
+
     @app.get("/api/update")
     def update_status():
         from .. import updater

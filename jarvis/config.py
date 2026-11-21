@@ -18,7 +18,8 @@ DEFAULT_THRESHOLDS = {
 
 
 def load_config(path: str = "config.yaml", allow_missing: bool = False) -> dict:
-    load_dotenv()
+    # Read .env from where Jarvis runs (/config in Docker), not from where the code lives.
+    load_dotenv(Path.cwd() / ".env")
     p = Path(path)
     if not p.exists() and not allow_missing:
         raise SystemExit(f"{path} not found. Run 'python -m jarvis setup' (or 'python -m jarvis web' and open Setup) to create it.")

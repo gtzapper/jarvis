@@ -40,6 +40,7 @@ HELP = """Things I understand:
   refresh plex [library name]    scan libraries for new files
   indexers / test indexers       Prowlarr indexer health
   hosts                          machines I can run commands on
+  scan proxmox                   find every VM/LXC, its IP, and whether Jarvis can log in
   run uptime on web1             run a shell command on a host (always asks first)
   create vm web1 [with 4 cores 8gb ram 64gb disk]   new VM from your template + static IP on pfSense
   check vm setup                 test the VM-creation permissions without changing anything
@@ -81,6 +82,7 @@ class Assistant:
             (r"^(help|\?|what can you do)$", lambda m: HELP),
             (r"^(new chat|new conversation|reset|forget (it|that|everything))$", self.new_chat),
             (r"^(hosts|list hosts|machines|servers)$", self.hosts),
+            (r"^(scan proxmox|discover( vms| guests)?|find (my )?(vms|guests|containers))$", self.discover),
             (r"^(run|exec|execute) (?P<cmd>.+?) on (?P<host>[\w.-]+)$", self.run),
             (r"^on (?P<host>[\w.-]+)[,:]? (run |exec |execute )?(?P<cmd>.+)$", self.run),
             (r"^check (vm|provisioning) setup$", self.check_vm_setup),
@@ -269,6 +271,23 @@ class Assistant:
         if not hosts:
             return "No hosts are set up for commands. Add them under linux_hosts in config.yaml."
         return "I can run commands on:\n" + "\n".join(f"  {h['name']}: {h.get('user', 'root')}@{h['host']}" for h in hosts)
+
+    def discover(self, m) -> str:
+        from .discovery import Discovery
+        try:
+            guests = Discovery(self.cfg).scan()
+        except ValueError as e:
+            raise _NotSetUp(str(e))
+        if not guests:
+            return "Proxmox has no VMs or containers."
+        lines = []
+        for g in guests:
+            where = f"{g['ip']} (from {g['ip_from']})" if g["ip"] else "no IP found"
+            tag = f"in Jarvis as {g['in_jarvis']}" if g["in_jarvis"] else ("not supported" if not g["supported"] else "not added")
+            lines.append(f"  {g['vmid']} {g['name']} [{g['type']}, {g['status']}] {where}: {tag}")
+        new = sum(1 for g in guests if not g["in_jarvis"] and g["ip"] and g["supported"])
+        tail = f"\n{new} can be added: Setup > Discovered on Proxmox." if new else ""
+        return f"{len(guests)} guests on Proxmox:\n" + "\n".join(lines) + tail
 
     def run(self, m) -> str:
         from .audit import audit

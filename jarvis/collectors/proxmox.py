@@ -1,3 +1,6 @@
+import json
+from pathlib import Path
+
 import requests
 import urllib3
 
@@ -5,6 +8,7 @@ from ..config import env
 from ..models import Report, check_disk, check_usage, fmt_uptime, pct
 
 IGNORE_FS = {"tmpfs", "devtmpfs", "squashfs", "overlay", "efivarfs", "vfat"}
+KNOWN_GUESTS = Path("data/known_guests.json")
 
 
 class ProxmoxCollector:
@@ -79,7 +83,29 @@ class ProxmoxCollector:
         rep.lines.append(f"Guests: {running}/{len(guests)} running")
         for typ, g in sorted(guests, key=lambda tg: int(tg[1]["vmid"])):
             rep.lines.append(self._guest(rep, n, typ, g))
+        self._new_guests(rep, n, guests)
         return rep
+
+    def _new_guests(self, rep: Report, node: str, guests: list) -> None:
+        """Announce VMs/LXCs that weren't there before. The first check only learns what exists."""
+        try:
+            known = json.loads(KNOWN_GUESTS.read_text(encoding="utf-8")) if KNOWN_GUESTS.exists() else None
+        except ValueError:
+            known = None
+        key = f"{self.name}/{node}"  # per node, so a cluster's second node isn't all "new" on the first run
+        first_run = known is None or key not in known
+        known = known or {}
+        seen = set(known.get(key, []))
+        for typ, g in guests:
+            if str(g["vmid"]) not in seen:
+                seen.add(str(g["vmid"]))
+                if not first_run:
+                    kind = "VM" if typ == "qemu" else "container"
+                    rep.events.append(f"New {kind} {g['vmid']} '{g.get('name', '?')}' appeared on {node}. "
+                                      "Add it to Jarvis from Setup > Discovered on Proxmox")
+        known[key] = sorted(seen, key=int)
+        KNOWN_GUESTS.parent.mkdir(exist_ok=True)
+        KNOWN_GUESTS.write_text(json.dumps(known), encoding="utf-8")
 
     def _guest(self, rep: Report, n: str, typ: str, g: dict) -> str:
         vmid = int(g["vmid"])
