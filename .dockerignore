@@ -1,0 +1,11 @@
+# Keep secrets and local state out of the image: they belong in the mounted /config folder.
+.env
+config.yaml
+config.yaml.bak
+config/
+data/
+.venv/
+__pycache__/
+**/__pycache__/
+*.pyc
+.git/

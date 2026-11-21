@@ -1,0 +1,117 @@
+# Copy to config.yaml and edit. Secrets go in .env, never in this file.
+
+interval_seconds: 60   # how often Jarvis checks everything
+alert_after: 2         # a problem must show up this many checks in a row before alerting (stops CPU-spike spam)
+
+thresholds:
+  cpu_percent: 90
+  mem_percent: 90
+  load_per_core: 2.0
+  disk_percent: 85            # warning
+  disk_critical_percent: 95   # critical
+  disk_temp_c: 50
+  ssd_life_min_percent: 10
+  cpu_temp_c: 80             # pfSense CPU temperature
+  state_table_percent: 80    # pfSense firewall state table
+
+proxmox:
+  - name: proxmox
+    host: 192.168.1.10
+    port: 8006
+    token_id_env: PVE_TOKEN_ID
+    token_secret_env: PVE_TOKEN_SECRET
+    verify_ssl: false          # Proxmox uses a self-signed cert by default
+    must_run: []               # VM/LXC IDs that should always be running, e.g. [100, 101]
+
+pfsense:
+  - name: pfsense
+    host: 192.168.1.1
+    port: 443
+    api_key_env: PFSENSE_API_KEY
+    verify_ssl: false            # pfSense uses a self-signed cert by default
+    new_device_alerts: true      # announce devices Jarvis hasn't seen before
+    firewall_log_lines: 500      # how many recent log lines to scan for blocked traffic
+    ignore_interfaces: []        # enabled but unplugged ports to skip, e.g. [OPT2]
+
+unraid:
+  - name: unraid
+    host: 192.168.1.20
+    user: root
+    key_file: ~/.ssh/jarvis_ed25519
+    # password_env: UNRAID_PASSWORD   # only if you can't use a key
+    must_run_containers: []    # e.g. [plex, nextcloud]
+
+linux_hosts:
+  - name: docker-vm
+    host: 192.168.1.30
+    user: jarvis
+    key_file: ~/.ssh/jarvis_ed25519
+    allow_commands: true        # let 'run ... on docker-vm' work (always asks first); unraid hosts default to false
+    command_timeout: 120
+    must_run_containers: []
+
+# Creating VMs: clone a cloud-init template on Proxmox, then reserve the IP on pfSense.
+# Uses separate write-capable credentials, so the monitoring ones above stay read-only.
+provisioning:
+  proxmox: proxmox               # name of the entry under proxmox:
+  admin_token_id_env: PVE_ADMIN_TOKEN_ID
+  admin_token_secret_env: PVE_ADMIN_TOKEN_SECRET
+  node: pve                      # Proxmox node to create VMs on
+  template_vmid: 9000            # your cloud-init template
+  storage: local-lvm
+  bridge: vmbr0
+  disk: scsi0
+  defaults: {cores: 2, memory_mb: 2048, disk_gb: 32}
+  limits: {cores: 8, memory_mb: 16384, disk_gb: 256}   # Jarvis refuses anything bigger
+  ci_user: jarvis                # user cloud-init creates, with passwordless sudo
+  ssh_public_key: ~/.ssh/jarvis_ed25519.pub
+  pfsense: pfsense               # name of the entry under pfsense:
+  admin_api_key_env: PFSENSE_ADMIN_API_KEY
+  dhcp_interface: lan
+  ip_pool: 192.168.1.200-192.168.1.249   # must be outside pfSense's dynamic DHCP range
+
+# Media stack: leave out anything you don't run. Find API keys in each app under Settings > General.
+media:
+  plex:
+    url: http://192.168.1.20:32400
+    token_env: PLEX_TOKEN
+  sonarr:
+    url: http://192.168.1.20:8989
+    api_key_env: SONARR_API_KEY
+    quality_profile: ""          # name used when adding, e.g. "HD-1080p"; blank = first profile
+    root_folder: ""              # e.g. /media/tv; blank = first root folder
+  radarr:
+    url: http://192.168.1.20:7878
+    api_key_env: RADARR_API_KEY
+    quality_profile: ""
+    root_folder: ""
+    minimum_availability: released
+  lidarr:
+    url: http://192.168.1.20:8686
+    api_key_env: LIDARR_API_KEY
+    quality_profile: ""
+    root_folder: ""
+  prowlarr:
+    url: http://192.168.1.20:9696
+    api_key_env: PROWLARR_API_KEY
+  overseerr:                     # Jellyseerr works too, same API
+    url: http://192.168.1.20:5055
+    api_key_env: OVERSEERR_API_KEY
+
+  # Download clients. Use a list (- url: ...) if you run more than one of the same kind.
+  qbittorrent:
+    url: http://192.168.1.20:8080
+    username: admin
+    password_env: QBIT_PASSWORD   # leave unset if Jarvis's IP is whitelisted in qBittorrent's Web UI settings
+  deluge:
+    url: http://192.168.1.20:8112
+    password_env: DELUGE_PASSWORD # the web UI password
+    slow_limit_kbps: 1024         # download cap when slow mode is on
+  sabnzbd:
+    url: http://192.168.1.20:8085
+    api_key_env: SABNZBD_API_KEY  # Config > General > API Key
+    slow_limit_percent: 25        # % of your line speed when slow mode is on
+    min_free_gb: 20               # warn below this much free space in the download folder
+
+notify:
+  ntfy_url_env: NTFY_URL       # optional phone push; leave unset for console only

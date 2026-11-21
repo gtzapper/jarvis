@@ -1,0 +1,373 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Jarvis</title>
+<style>
+:root {
+  --bg: #f4f5f7; --panel: #ffffff; --panel2: #f9fafb; --text: #1b1f24; --muted: #667085; --line: #e4e7ec;
+  --accent: #2563eb; --accent-text: #ffffff; --ok: #16a34a; --warn: #d97706; --crit: #dc2626;
+  --ok-bg: #dcfce7; --warn-bg: #fef3c7; --crit-bg: #fee2e2; --shadow: 0 1px 2px rgba(16,24,40,.06);
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0f1216; --panel: #171b21; --panel2: #1d222a; --text: #e6e8eb; --muted: #98a2b3; --line: #2a313b;
+    --accent: #3b82f6; --ok: #22c55e; --warn: #f59e0b; --crit: #ef4444;
+    --ok-bg: #12301d; --warn-bg: #3a2a0c; --crit-bg: #3b1515; --shadow: none;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+button, input, select { font: inherit; color: inherit; }
+.app { display: grid; grid-template-columns: 210px 1fr; min-height: 100vh; }
+nav { background: var(--panel); border-right: 1px solid var(--line); padding: 18px 12px; display: flex; flex-direction: column; gap: 4px; }
+.brand { font-weight: 700; font-size: 18px; padding: 4px 10px 16px; letter-spacing: .3px; }
+.brand span { color: var(--accent); }
+nav button { text-align: left; background: none; border: 0; padding: 9px 10px; border-radius: 8px; cursor: pointer; color: var(--muted); }
+nav button:hover { background: var(--panel2); color: var(--text); }
+nav button.active { background: var(--panel2); color: var(--text); font-weight: 600; }
+nav .spacer { flex: 1; }
+main { padding: 24px; min-width: 0; }
+h1 { font-size: 20px; margin: 0 0 4px; }
+.sub { color: var(--muted); margin: 0 0 18px; }
+.row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.btn { background: var(--panel); border: 1px solid var(--line); padding: 7px 12px; border-radius: 8px; cursor: pointer; }
+.btn:hover { border-color: var(--muted); }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+.btn.danger { color: var(--crit); }
+.btn:disabled { opacity: .5; cursor: default; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; box-shadow: var(--shadow); }
+.summary { display: flex; gap: 14px; align-items: center; margin-bottom: 18px; }
+.summary .text { flex: 1; font-size: 15px; }
+.pill { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 99px; font-size: 12px; font-weight: 600; white-space: nowrap; }
+.pill.ok { background: var(--ok-bg); color: var(--ok); }
+.pill.warn { background: var(--warn-bg); color: var(--warn); }
+.pill.crit { background: var(--crit-bg); color: var(--crit); }
+.pill.mute { background: var(--panel2); color: var(--muted); }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 14px; }
+.sys h3 { margin: 0; font-size: 15px; }
+.sys .head { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 8px; }
+.kind { color: var(--muted); font-size: 12px; }
+.lines { color: var(--muted); font-size: 13px; white-space: pre-wrap; word-break: break-word; margin: 0; font-family: inherit; }
+.prob { padding: 6px 9px; border-radius: 8px; margin: 0 0 6px; font-size: 13px; }
+.prob.warning { background: var(--warn-bg); }
+.prob.critical { background: var(--crit-bg); }
+.more { background: none; border: 0; color: var(--accent); cursor: pointer; padding: 4px 0 0; font-size: 13px; }
+.events { margin-top: 22px; }
+.events li, .activity li { padding: 6px 0; border-bottom: 1px solid var(--line); font-size: 13px; list-style: none; word-break: break-word; }
+.events ul, .activity ul { margin: 0; padding: 0; }
+.time { color: var(--muted); font-variant-numeric: tabular-nums; margin-right: 8px; }
+/* chat */
+.chat { display: flex; flex-direction: column; height: calc(100vh - 48px); }
+.msgs { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; padding: 4px 2px 12px; }
+.msg { max-width: 820px; padding: 10px 13px; border-radius: 12px; white-space: pre-wrap; word-break: break-word; }
+.msg.you { align-self: flex-end; background: var(--accent); color: var(--accent-text); }
+.msg.jarvis { align-self: flex-start; background: var(--panel); border: 1px solid var(--line); }
+.msg .progress { color: var(--muted); font-size: 13px; }
+.msg .choices { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; align-items: flex-start; }
+.chips { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; }
+.chip { background: var(--panel); border: 1px solid var(--line); border-radius: 99px; padding: 4px 11px; cursor: pointer; font-size: 13px; }
+.chip:hover { border-color: var(--accent); }
+.composer { display: flex; gap: 8px; }
+.composer input { flex: 1; padding: 11px 13px; border-radius: 10px; border: 1px solid var(--line); background: var(--panel); }
+/* tables & forms */
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); }
+th { color: var(--muted); font-weight: 600; }
+.tablewrap { overflow-x: auto; }
+select.select, input[type=text], input[type=password], input[type=number], input[type=search] { width: 100%; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel2); }
+.group-title { margin: 26px 0 10px; font-size: 13px; text-transform: uppercase; letter-spacing: .6px; color: var(--muted); }
+.svc { margin-bottom: 10px; padding: 0; }
+.svc > summary { list-style: none; cursor: pointer; padding: 13px 16px; display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+.svc > summary::-webkit-details-marker { display: none; }
+.svc .body { padding: 0 16px 16px; }
+.help { color: var(--muted); font-size: 13px; margin: 0 0 12px; }
+.entry { border: 1px solid var(--line); border-radius: 10px; padding: 14px; margin-bottom: 12px; background: var(--panel2); }
+.fields { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 12px; margin-bottom: 12px; }
+.field label { display: block; font-size: 12px; font-weight: 600; margin-bottom: 4px; }
+.field .fhelp { color: var(--muted); font-size: 12px; margin-top: 3px; }
+.field.check label { display: flex; gap: 8px; align-items: center; font-weight: 500; font-size: 13px; margin-top: 18px; }
+.result { font-size: 13px; margin-top: 10px; }
+.result.ok { color: var(--ok); } .result.bad { color: var(--crit); }
+.keybox { font-family: ui-monospace, Consolas, monospace; font-size: 12px; word-break: break-all; background: var(--panel2); padding: 10px; border-radius: 8px; margin: 8px 0; }
+.empty { color: var(--muted); padding: 30px; text-align: center; }
+@media (max-width: 760px) {
+  .app { grid-template-columns: 1fr; }
+  nav { flex-direction: row; overflow-x: auto; padding: 8px; border-right: 0; border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 2; }
+  .brand { padding: 8px 10px; } nav .spacer { display: none; }
+  main { padding: 16px; }
+  .chat { height: calc(100vh - 90px); }
+  .grid { grid-template-columns: 1fr; }
+}
+</style>
+</head>
+<body>
+<div class="app">
+  <nav>
+    <div class="brand">J<span>A</span>RVIS</div>
+    <button data-view="dashboard" class="active">Dashboard</button>
+    <button data-view="chat">Chat</button>
+    <button data-view="devices">Devices</button>
+    <button data-view="activity">Activity</button>
+    <button data-view="setup">Setup</button>
+    <div class="spacer"></div>
+    <button id="logout" hidden>Log out</button>
+  </nav>
+  <main>
+    <section id="dashboard">
+      <h1>Dashboard</h1>
+      <p class="sub" id="updated">Loading...</p>
+      <div class="card summary">
+        <div class="text" id="summary"></div>
+        <div class="row" id="counts"></div>
+        <button class="btn" id="refresh">Check now</button>
+      </div>
+      <div class="grid" id="systems"></div>
+      <div class="card events"><h3 style="margin:0 0 8px;font-size:15px">Recent alerts</h3><ul id="events"></ul></div>
+    </section>
+
+    <section id="chat" hidden>
+      <div class="chat">
+        <div class="msgs" id="msgs"></div>
+        <div class="chips" id="chips"></div>
+        <form class="composer" id="composer">
+          <input id="input" autocomplete="off" placeholder="Ask Jarvis anything, e.g. why is Plex buffering? / grab the new Dune movie / is the NAS ok?">
+          <button class="btn primary">Send</button>
+        </form>
+      </div>
+    </section>
+
+    <section id="devices" hidden>
+      <h1>Devices</h1>
+      <p class="sub">Everything pfSense can see on your network.</p>
+      <div class="row" style="margin-bottom:12px"><input type="search" id="devsearch" placeholder="Filter by IP, MAC or hostname" style="max-width:360px"><button class="btn" id="devreload">Reload</button></div>
+      <div class="card tablewrap"><table><thead><tr><th>IP</th><th>Hostname</th><th>MAC</th><th>Interface</th><th>Online</th></tr></thead><tbody id="devrows"></tbody></table></div>
+    </section>
+
+    <section id="activity" hidden>
+      <h1>Activity</h1>
+      <p class="sub">Every change Jarvis made: commands run (and declined), VMs created, IPs reserved.</p>
+      <div class="card activity"><ul id="audit"></ul></div>
+    </section>
+
+    <section id="setup" hidden>
+      <h1>Setup</h1>
+      <p class="sub">Add your services here. Keys and passwords are saved to <code>.env</code> on this PC and are never shown again; leave a secret field blank to keep its current value.</p>
+      <div class="card" id="sshcard"></div>
+      <div id="services"></div>
+    </section>
+  </main>
+</div>
+
+<script>
+const $ = (s, el = document) => el.querySelector(s);
+const el = (tag, attrs = {}, ...kids) => {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (k === "class") e.className = v;
+    else if (k.startsWith("on")) e.addEventListener(k.slice(2), v);
+    else if (v !== false && v != null) e.setAttribute(k, v === true ? "" : v);
+  }
+  for (const kid of kids.flat()) if (kid != null) e.append(kid instanceof Node ? kid : document.createTextNode(String(kid)));
+  return e;
+};
+const put = (target, ...kids) => target.replaceChildren(...kids.flat(Infinity).filter(k => k != null && k !== false));
+async function api(path, body) {
+  const opts = body === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/json", "X-Jarvis": "1" }, body: JSON.stringify(body) };
+  const r = await fetch(path, opts);
+  if (r.status === 401) { location.href = "/login"; throw new Error("login"); }
+  return r.json();
+}
+
+/* ---------- navigation ---------- */
+let current = "dashboard";
+function show(view) {
+  current = view;
+  document.querySelectorAll("nav button[data-view]").forEach(b => b.classList.toggle("active", b.dataset.view === view));
+  document.querySelectorAll("main > section").forEach(s => s.hidden = s.id !== view);
+  ({ dashboard: loadStatus, devices: loadDevices, activity: loadActivity, setup: loadSetup, chat: () => $("#input").focus() })[view]();
+  try { localStorage.setItem("jarvis.view", view); } catch {}
+}
+document.querySelectorAll("nav button[data-view]").forEach(b => b.onclick = () => show(b.dataset.view));
+
+/* ---------- dashboard ---------- */
+function statusPill(r) {
+  if (!r.reachable) return el("span", { class: "pill crit" }, "Down");
+  if (r.problems.some(p => p.severity === "critical")) return el("span", { class: "pill crit" }, "Critical");
+  if (r.problems.length) return el("span", { class: "pill warn" }, `${r.problems.length} issue${r.problems.length > 1 ? "s" : ""}`);
+  return el("span", { class: "pill ok" }, "OK");
+}
+function systemCard(r) {
+  const lines = r.lines || [];
+  const pre = el("pre", { class: "lines" }, lines.slice(0, 8).join("\n"));
+  const more = lines.length > 8 ? el("button", { class: "more", onclick: e => { pre.textContent = lines.join("\n"); e.target.remove(); } }, `Show ${lines.length - 8} more`) : null;
+  return el("div", { class: "card sys" },
+    el("div", { class: "head" }, el("div", {}, el("h3", {}, r.name), el("div", { class: "kind" }, r.kind)), statusPill(r)),
+    r.problems.map(p => el("div", { class: `prob ${p.severity}` }, p.message)),
+    (r.events || []).map(e => el("div", { class: "prob warning" }, e)),
+    pre, more);
+}
+async function loadStatus() {
+  const s = await api("/api/status");
+  $("#updated").textContent = s.updated ? `Last checked ${s.updated}. Updates automatically.` : (s.configured ? "First check running..." : "");
+  $("#summary").textContent = s.summary;
+  put($("#counts"), 
+    el("span", { class: "pill mute" }, `${s.counts.systems} systems`),
+    s.counts.critical ? el("span", { class: "pill crit" }, `${s.counts.critical} critical`) : null,
+    s.counts.warning ? el("span", { class: "pill warn" }, `${s.counts.warning} warnings`) : null);
+  const order = r => !r.reachable || r.problems.some(p => p.severity === "critical") ? 0 : r.problems.length ? 1 : 2;
+  const reports = [...s.reports].sort((a, b) => order(a) - order(b));
+  put($("#systems"), ...(reports.length ? reports.map(systemCard)
+    : [el("div", { class: "card empty" }, s.configured ? "Checking your systems..." : "Nothing set up yet. ", s.configured ? null : el("button", { class: "btn primary", onclick: () => show("setup") }, "Open Setup"))]));
+  put($("#events"), ...(s.events.length ? s.events.map(e => el("li", {}, el("span", { class: "time" }, e.time), e.text)) : [el("li", { class: "kind" }, "No alerts yet.")]));
+}
+$("#refresh").onclick = async () => { await api("/api/refresh", {}); $("#updated").textContent = "Checking now..."; setTimeout(loadStatus, 4000); };
+setInterval(() => { if (current === "dashboard" && !document.hidden) loadStatus(); }, 10000);
+
+/* ---------- chat ---------- */
+const QUICK = ["status", "media status", "downloads", "torrents", "who's watching", "upcoming", "requests", "hosts", "new chat", "help"];
+put($("#chips"), ...QUICK.map(q => el("button", { class: "chip", onclick: () => send(q) }, q)));
+function bubble(cls, text) { const b = el("div", { class: `msg ${cls}` }, text); $("#msgs").append(b); b.scrollIntoView({ block: "end" }); return b; }
+async function send(text) {
+  if (!text.trim()) return;
+  bubble("you", text);
+  const b = bubble("jarvis", el("span", { class: "progress" }, "..."));
+  follow(await api("/api/chat", { text }), b);
+}
+function follow(job, b) {
+  const render = () => {
+    const parts = [];
+    if (job.progress.length) parts.push(el("div", { class: "progress" }, job.progress.join("\n")));
+    if (job.status === "running") parts.push(el("div", { class: "progress" }, job.progress.length ? "working..." : "..."));
+    if (job.status === "done") parts.push(el("div", {}, job.reply));
+    if (job.status === "input" && job.prompt) {
+      const answer = async a => { b.querySelectorAll("button").forEach(x => x.disabled = true); job = await api(`/api/chat/${job.id}/answer`, { answer: a }); render(); poll(); };
+      if (job.prompt.type === "confirm") {
+        parts.push(el("div", {}, job.prompt.question),
+          el("div", { class: "row", style: "margin-top:10px" }, el("button", { class: "btn primary", onclick: () => answer(true) }, "Yes, do it"), el("button", { class: "btn", onclick: () => answer(false) }, "No")));
+      } else {
+        parts.push(el("div", {}, "Which one?"),
+          el("div", { class: "choices" }, job.prompt.options.map((o, i) => el("button", { class: "btn", onclick: () => answer(i) }, o)), el("button", { class: "btn", onclick: () => answer(null) }, "Cancel")));
+      }
+    }
+    b.replaceChildren(...parts);
+    b.scrollIntoView({ block: "end" });
+  };
+  const poll = async () => {
+    while (job.status === "running") { await new Promise(r => setTimeout(r, 800)); job = await api(`/api/chat/${job.id}`); render(); }
+  };
+  render(); poll();
+}
+$("#composer").onsubmit = e => { e.preventDefault(); const t = $("#input").value; $("#input").value = ""; send(t); };
+bubble("jarvis", "Hi. Ask me anything from the list, or tap a suggestion below. Anything that changes something asks you first.");
+
+/* ---------- devices ---------- */
+let devs = [];
+async function loadDevices() {
+  put($("#devrows"), el("tr", {}, el("td", { colspan: 5, class: "kind" }, "Loading...")));
+  const d = await api("/api/devices");
+  devs = d.devices || [];
+  renderDevices(d.error);
+}
+function renderDevices(error) {
+  const q = $("#devsearch").value.toLowerCase();
+  const rows = devs.filter(d => !q || [d.ip, d.mac, d.hostname].join(" ").toLowerCase().includes(q));
+  put($("#devrows"), ...(error ? [el("tr", {}, el("td", { colspan: 5, class: "result bad" }, error))] : []),
+    ...(rows.length ? rows.map(d => el("tr", {}, el("td", {}, d.ip), el("td", {}, d.hostname || "-"), el("td", {}, d.mac), el("td", {}, d.interface),
+      el("td", {}, el("span", { class: `pill ${d.online ? "ok" : "mute"}` }, d.online ? "yes" : "no"))))
+      : [el("tr", {}, el("td", { colspan: 5, class: "kind" }, devs.length ? "No matches." : "No devices. Is pfSense set up?"))]));
+}
+$("#devsearch").oninput = () => renderDevices();
+$("#devreload").onclick = loadDevices;
+
+/* ---------- activity ---------- */
+async function loadActivity() {
+  const a = await api("/api/activity");
+  put($("#audit"), ...(a.lines.length ? a.lines.map(l => el("li", {}, el("span", { class: "time" }, l.slice(0, 19)), l.slice(21))) : [el("li", { class: "kind" }, "Nothing yet.")]));
+}
+
+/* ---------- setup ---------- */
+async function loadSetup() {
+  const s = await api("/api/setup");
+  renderSsh(s.ssh_public_key);
+  const groups = {};
+  s.services.forEach(svc => (groups[svc.group] ||= []).push(svc));
+  const open = new Set([...document.querySelectorAll("#services details[open]")].map(d => d.dataset.id));
+  put($("#services"), ...Object.entries(groups).flatMap(([g, list]) => [el("div", { class: "group-title" }, g), ...list.map(svc => serviceCard(svc, open.has(svc.id)))]));
+}
+function renderSsh(key) {
+  const copy = el("button", { class: "btn", onclick: async () => { try { await navigator.clipboard.writeText(key); copy.textContent = "Copied"; } catch { copy.textContent = "Select and copy it manually"; } } }, "Copy");
+  put($("#sshcard"), el("strong", {}, "Jarvis's SSH key"),
+    el("p", { class: "help", style: "margin:4px 0 0" }, "Jarvis logs into Unraid and your VMs with this key. Paste the public key into Unraid (Users > root > SSH authorized keys) and into ~/.ssh/authorized_keys on each VM."),
+    key ? [el("div", { class: "keybox" }, key), copy]
+        : el("button", { class: "btn primary", style: "margin-top:10px", onclick: async () => { const r = await api("/api/sshkey", {}); renderSsh(r.public_key); } }, "Create SSH key"));
+}
+function serviceCard(svc, isOpen) {
+  const n = svc.entries.length;
+  const badge = n ? el("span", { class: "pill ok" }, svc.multi ? `${n} set up` : "Set up") : el("span", { class: "pill mute" }, "Not set up");
+  const body = el("div", { class: "body" }, el("p", { class: "help" }, svc.help));
+  if (!svc.editable) body.append(el("p", { class: "result bad" }, "This has several instances in config.yaml. Edit that file by hand."));
+  else {
+    svc.entries.forEach((e, i) => body.append(entryForm(svc, e, i)));
+    if (svc.multi || !n) {
+      const add = el("button", { class: "btn", onclick: () => { add.replaceWith(entryForm(svc, null, null)); } }, n ? `+ Add another ${svc.label}` : `+ Set up ${svc.label}`);
+      body.append(add);
+    }
+  }
+  return el("details", { class: "card svc", "data-id": svc.id, open: isOpen }, el("summary", {}, el("strong", {}, svc.label), badge), body);
+}
+function entryForm(svc, values, index) {
+  const inputs = {};
+  const fields = svc.fields.map(f => {
+    const v = values ? values[f.key] : f.default;
+    if (f.kind === "bool") {
+      const cb = el("input", { type: "checkbox" }); cb.checked = !!v; inputs[f.key] = () => cb.checked;
+      return el("div", { class: "field check" }, el("label", {}, cb, f.label), f.help ? el("div", { class: "fhelp" }, f.help) : null);
+    }
+    let input;
+    if (f.kind === "choice") {
+      const sel = el("select", { class: "select" }, f.options.map(o => el("option", { value: o }, o)));
+      sel.value = v ?? f.default;
+      inputs[f.key] = () => sel.value;
+      return el("div", { class: "field" }, el("label", {}, f.label), sel, f.help ? el("div", { class: "fhelp" }, f.help) : null);
+    }
+    if (f.kind === "secret") {
+      const set = values && v && v.set;
+      input = el("input", { type: "password", autocomplete: "new-password", placeholder: set ? "Saved. Leave blank to keep" : (f.required ? "Required" : "Optional") });
+    } else {
+      input = el("input", { type: f.kind === "int" ? "number" : "text", placeholder: f.default != null ? String(f.default) : "" });
+      input.value = v ?? "";
+    }
+    inputs[f.key] = () => input.value;
+    return el("div", { class: "field" }, el("label", {}, f.label + (f.required ? " *" : "")), input, f.help ? el("div", { class: "fhelp" }, f.help) : null);
+  });
+  const result = el("div", { class: "result" });
+  const saveBtn = el("button", { class: "btn primary" }, svc.testable ? "Save & test" : "Save");
+  saveBtn.onclick = async () => {
+    saveBtn.disabled = true; result.className = "result"; result.textContent = svc.testable ? "Saving and testing..." : "Saving...";
+    const vals = Object.fromEntries(Object.entries(inputs).map(([k, get]) => [k, get()]));
+    const r = await api(`/api/setup/${svc.id}`, { index, values: vals, test: true });
+    saveBtn.disabled = false;
+    if (!r.ok) { result.className = "result bad"; result.textContent = r.error; return; }
+    if (r.test) { result.className = `result ${r.test.ok ? "ok" : "bad"}`; result.textContent = (r.test.ok ? "Saved. " : "Saved, but the test failed: ") + r.test.message; }
+    else { result.className = "result ok"; result.textContent = "Saved."; }
+    index = r.index;
+    setTimeout(loadSetup, r.test && !r.test.ok ? 6000 : 1500);
+  };
+  const removeBtn = index != null ? el("button", { class: "btn danger", onclick: async () => {
+    if (!confirm(`Remove this ${svc.label} entry from Jarvis? (Nothing on the service itself is changed.)`)) return;
+    await api(`/api/setup/${svc.id}/delete`, { index }); loadSetup();
+  } }, "Remove") : null;
+  return el("div", { class: "entry" }, el("div", { class: "fields" }, fields), el("div", { class: "row" }, saveBtn, removeBtn), result);
+}
+
+/* ---------- start ---------- */
+fetch("/login", { method: "HEAD", redirect: "manual" }).then(r => { if (r.type !== "opaqueredirect") $("#logout").hidden = false; }).catch(() => {});
+$("#logout").onclick = async () => { await api("/logout", {}); location.href = "/login"; };
+let start = "dashboard";
+try { start = localStorage.getItem("jarvis.view") || start; } catch {}
+show(start);
+</script>
+</body>
+</html>

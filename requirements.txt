@@ -1,0 +1,7 @@
+requests>=2.32
+paramiko>=3.5
+python-dotenv>=1.0
+PyYAML>=6.0
+flask>=3.0
+waitress>=3.0
+anthropic>=2.12
