@@ -212,6 +212,16 @@ SERVICES: list[Service] = [
     Service("notify", "Phone alerts (ntfy)", "Alerts", ("notify",), test=_t_notify,
             help="Install the ntfy app, subscribe to a long random topic, use https://ntfy.sh/<topic>.",
             fields=[Field("ntfy_url_env", "ntfy URL", "secret", env="NTFY_URL", required=True)]),
+    Service("discovery", "Proxmox discovery defaults", "Infrastructure", ("discovery",),
+            help="How Setup > Discovered on Proxmox pre-fills the Add form. Username 'guest name' tries each VM/LXC's own "
+                 "name as the SSH user; 'fixed user' uses one name for all. A default password is tried when you pick "
+                 "password login and leave the box blank.",
+            fields=[Field("username_mode", "Username to try", "choice", default="name", options=["name", "fixed"],
+                          help="name = the VM/container's name; fixed = the user below"),
+                    Field("default_user", "Fixed user", default="root", help="Used when 'Username to try' is 'fixed'"),
+                    Field("default_auth", "Default login", "choice", default="key", options=["key", "password"]),
+                    Field("default_password_env", "Default password", "secret", env="DISCOVERY_PASSWORD",
+                          help="Tried on guests when you add them with password login and no password typed")]),
     Service("updates", "Updates", "Alerts", ("updates",),
             help="Jarvis updates itself from its GitHub repo (the button at the top of this page). For a private repo, create a "
                  "fine-grained GitHub token with read-only 'Contents' access to that one repo and paste it here.",

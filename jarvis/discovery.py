@@ -31,9 +31,16 @@ def _hostname(name: str, vmid: int) -> str:
     return n or f"guest-{vmid}"
 
 
+def _username(name: str, vmid: int) -> str:
+    """A login name from the guest's name: lowercase, letters/digits/dash/underscore only."""
+    u = re.sub(r"[^a-z0-9_-]+", "-", str(name or "").lower()).strip("-_")
+    return u or f"guest-{vmid}"
+
+
 class Discovery:
     def __init__(self, cfg: dict):
         self.cfg = cfg
+        self.defaults = cfg.get("discovery") or {}
         self._macs: dict[str, str] | None = None
         self._macs_lock = threading.Lock()  # guests are scanned in parallel; load pfSense's list once
 
@@ -108,6 +115,10 @@ class Discovery:
                       or h.get("vmid") == vmid or h.get("name", "").lower() == out["name"].lower()), None)
         out["in_jarvis"] = known.get("name") if known else None
         out["suggested_name"] = _hostname(out["name"], vmid)
+        if self.defaults.get("username_mode", "name") == "name":
+            out["suggested_user"] = ("Administrator" if out["windows"] else _username(out["name"], vmid))
+        else:
+            out["suggested_user"] = self.defaults.get("default_user") or out["user"]
         return out
 
     def scan(self) -> list[dict]:
@@ -132,11 +143,24 @@ class Discovery:
 
 
 def add_guest(name: str, ip: str, user: str, key_file: str = "~/.ssh/jarvis_ed25519",
-              os_type: str = "linux", auth: str = "key", password: str = "") -> tuple[int, str, bool]:
+              os_type: str = "linux", auth: str = "key", password: str = "",
+              use_default_password: bool = False) -> tuple[int, str, bool]:
     """Add a discovered guest as a host and try logging in. Returns (index, test message, ok)."""
     use_password = auth == "password"
+    default_env = (S.load_raw().get("discovery") or {}).get("default_password_env")
+    if use_password and not password and use_default_password:
+        if not (default_env and S.secrets().get(default_env)):
+            raise ValueError("No default password is set. Add one in the discovery options, or type a password")
+        idx = S.save("linux_hosts", {"name": name, "host": ip, "user": user or "root", "auth": "password",
+                                     "key_file": "", "os": "windows" if os_type == "windows" else "linux",
+                                     "allow_commands": True, "command_timeout": 120})
+        _point_at_env(idx, default_env)  # reference the shared DISCOVERY_PASSWORD without copying its value
+        try:
+            return idx, S.test("linux_hosts", idx), True
+        except Exception as e:
+            return idx, str(e), False
     if use_password and not password:
-        raise ValueError("Enter the password for password login")
+        raise ValueError("Enter a password, or tick 'use the default password'")
     idx = S.save("linux_hosts", {"name": name, "host": ip, "user": user or "root",
                                  "auth": "password" if use_password else "key",
                                  "key_file": "" if use_password else key_file,
@@ -147,6 +171,18 @@ def add_guest(name: str, ip: str, user: str, key_file: str = "~/.ssh/jarvis_ed25
         return idx, S.test("linux_hosts", idx), True
     except Exception as e:
         return idx, str(e), False
+
+
+def _point_at_env(host_index: int, env_name: str) -> None:
+    """Make a linux_hosts entry reference an existing .env variable, without writing anything to .env."""
+    raw = S.load_raw()
+    raw["linux_hosts"][host_index]["password_env"] = env_name
+    S._write_raw(raw)
+
+
+def save_defaults(username_mode: str, default_user: str, default_auth: str, default_password: str) -> None:
+    S.save("discovery", {"username_mode": username_mode, "default_user": default_user,
+                         "default_auth": default_auth, "default_password_env": default_password})
 
 
 def set_must_run(source: str, vmid: int, on: bool) -> list[int]:

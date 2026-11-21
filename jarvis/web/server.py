@@ -298,7 +298,12 @@ def create_app(state: State, password: str | None) -> Flask:
         try:
             with state.lock:
                 cfg = state.cfg
-            return jsonify(ok=True, guests=Discovery(cfg).scan())
+            d = cfg.get("discovery") or {}
+            from .. import setup_schema as sch
+            defaults = {"username_mode": d.get("username_mode", "name"), "default_user": d.get("default_user", "root"),
+                        "default_auth": d.get("default_auth", "key"),
+                        "default_password_set": bool(sch.secrets().get(d.get("default_password_env", "DISCOVERY_PASSWORD")))}
+            return jsonify(ok=True, guests=Discovery(cfg).scan(), defaults=defaults)
         except Exception as e:
             return jsonify(ok=False, error=str(e))
 
@@ -308,11 +313,24 @@ def create_app(state: State, password: str | None) -> Flask:
         b = request.json or {}
         try:
             idx, message, ok = add_guest(b.get("name", ""), b.get("ip", ""), b.get("user", "root"), os_type=b.get("os", "linux"),
-                                         auth=b.get("auth", "key"), password=b.get("password", ""))
+                                         auth=b.get("auth", "key"), password=b.get("password", ""),
+                                         use_default_password=bool(b.get("use_default_password")))
         except ValueError as e:
             return jsonify(ok=False, error=str(e)), 400
         state.reload()
         return jsonify(ok=True, index=idx, login_ok=ok, message=message)
+
+    @app.post("/api/discover/defaults")
+    def discover_defaults():
+        from ..discovery import save_defaults
+        b = request.json or {}
+        try:
+            save_defaults(b.get("username_mode", "name"), b.get("default_user", "root"),
+                          b.get("default_auth", "key"), b.get("default_password", ""))
+        except ValueError as e:
+            return jsonify(ok=False, error=str(e)), 400
+        state.reload()
+        return jsonify(ok=True)
 
     @app.get("/api/windows-setup")
     def windows_setup():

@@ -154,6 +154,12 @@ Jarvis only runs read-only commands (`/proc`, `df`, `docker ps`, `systemctl --fa
 
 Windows' OpenSSH Server allows password logins by default.
 
+**Discovery defaults:** at the top of Setup → Discovered on Proxmox, "When adding, try:" sets how each Add is pre-filled:
+- **Username = the guest's own name** (so a VM called `plex` is tried as user `plex`), or a single fixed user for all guests.
+- **Default login** (key or password) and a **default password**, saved once in `.env` as `DISCOVERY_PASSWORD`. When you add a guest with password login and leave the box blank, Jarvis tries this one. Every host that uses it references the same saved password, so changing it in one place updates them all.
+
+You can still override the username, login type or password on any individual row before clicking Add.
+
 ### 5. Media stack
 For each app you run, add its URL under `media:` in `config.yaml` and its key in `.env`. Leave out anything you don't use.
 - **Sonarr, Radarr, Lidarr, Prowlarr, Overseerr/Jellyseerr:** Settings → General → API Key.

@@ -348,12 +348,14 @@ async function scanProxmox() {
   put(card, el("strong", {}, "Discovered on Proxmox"), el("p", { class: "help" }, "Scanning..."));
   const r = await api("/api/discover");
   if (!r.ok) { put(card, el("strong", {}, "Discovered on Proxmox"), el("p", { class: "result bad" }, r.error)); return; }
+  const d = r.defaults || { username_mode: "name", default_auth: "key", default_password_set: false };
   const rows = r.guests.map(g => {
     const result = el("div", { class: "fhelp" });
-    const user = el("input", { type: "text", value: g.user, style: "width:90px", title: "SSH user" });
+    const user = el("input", { type: "text", value: g.suggested_user || g.user, style: "width:90px", title: "SSH user" });
     const name = el("input", { type: "text", value: g.suggested_name, style: "width:130px", title: "Name in Jarvis" });
     const auth = el("select", { class: "select", style: "width:auto", title: "How Jarvis logs in" }, el("option", { value: "key" }, "SSH key"), el("option", { value: "password" }, "Password"));
-    const pass = el("input", { type: "password", placeholder: "Password", autocomplete: "new-password", style: "width:120px", hidden: true });
+    auth.value = d.default_auth;
+    const pass = el("input", { type: "password", placeholder: d.default_password_set ? "default password" : "Password", autocomplete: "new-password", style: "width:120px", hidden: d.default_auth !== "password" });
     auth.onchange = () => { pass.hidden = auth.value !== "password"; if (!pass.hidden) pass.focus(); };
     let action;
     if (g.in_jarvis) action = el("span", { class: "pill ok" }, "In Jarvis: " + g.in_jarvis);
@@ -363,7 +365,7 @@ async function scanProxmox() {
       const add = el("button", { class: "btn primary" }, "Add");
       add.onclick = async () => {
         add.disabled = true; result.className = "fhelp"; result.textContent = "Adding and testing SSH...";
-        const a = await api("/api/discover/add", { name: name.value, ip: g.ip, user: user.value, os: g.windows ? "windows" : "linux", auth: auth.value, password: pass.value });
+        const a = await api("/api/discover/add", { name: name.value, ip: g.ip, user: user.value, os: g.windows ? "windows" : "linux", auth: auth.value, password: pass.value, use_default_password: auth.value === "password" && !pass.value && d.default_password_set });
         if (!a.ok) { result.className = "fhelp result bad"; result.textContent = a.error; add.disabled = false; return; }
         result.className = `fhelp result ${a.login_ok ? "ok" : "bad"}`;
         result.textContent = a.login_ok ? "Added. " + a.message : "Added, but login failed: " + a.message + (g.windows ? " (run the Windows setup steps below on this VM)" : " (add Jarvis's SSH key to this guest, or fix the user in Setup > VMs / servers)");
@@ -399,8 +401,29 @@ async function scanProxmox() {
   }
   put(card, el("div", { class: "row", style: "justify-content:space-between" }, el("strong", {}, "Discovered on Proxmox"), el("button", { class: "btn", onclick: scanProxmox }, "Scan again")),
     el("p", { class: "help", style: "margin:4px 0 10px" }, `${r.guests.length} guests, ${addable} can be added. "Alert if stopped" warns you whenever that guest isn't running.`),
+    defaultsBar(d),
     el("div", { class: "tablewrap" }, el("table", {}, el("thead", {}, el("tr", {}, ["ID", "Name", "Status", "IP", "Alert if stopped", ""].map(h => el("th", {}, h)))), el("tbody", {}, rows))),
     winHelp);
+}
+function defaultsBar(d) {
+  const mode = el("select", { class: "select", style: "width:auto" }, el("option", { value: "name" }, "guest's own name"), el("option", { value: "fixed" }, "a fixed user"));
+  mode.value = d.username_mode;
+  const fixedUser = el("input", { type: "text", value: d.default_user || "root", style: "width:100px", hidden: d.username_mode !== "fixed", title: "Fixed username" });
+  mode.onchange = () => { fixedUser.hidden = mode.value !== "fixed"; };
+  const auth = el("select", { class: "select", style: "width:auto" }, el("option", { value: "key" }, "SSH key"), el("option", { value: "password" }, "password"));
+  auth.value = d.default_auth;
+  const pass = el("input", { type: "password", autocomplete: "new-password", placeholder: d.default_password_set ? "saved - leave blank to keep" : "default password", style: "width:150px" });
+  const msg = el("span", { class: "fhelp" });
+  const save = el("button", { class: "btn" }, "Save & rescan");
+  save.onclick = async () => {
+    save.disabled = true; msg.className = "fhelp"; msg.textContent = "Saving...";
+    const res = await api("/api/discover/defaults", { username_mode: mode.value, default_user: fixedUser.value, default_auth: auth.value, default_password: pass.value });
+    if (!res.ok) { msg.className = "fhelp result bad"; msg.textContent = res.error; save.disabled = false; return; }
+    scanProxmox();
+  };
+  return el("div", { class: "entry", style: "margin-bottom:12px" },
+    el("div", { style: "font-weight:600;margin-bottom:8px" }, "When adding, try:"),
+    el("div", { class: "row" }, el("span", {}, "username ="), mode, fixedUser, el("span", {}, "  login ="), auth, pass, save, msg));
 }
 function renderSsh(key) {
   const copy = el("button", { class: "btn", onclick: async () => { try { await navigator.clipboard.writeText(key); copy.textContent = "Copied"; } catch { copy.textContent = "Select and copy it manually"; } } }, "Copy");
