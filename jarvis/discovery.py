@@ -60,7 +60,7 @@ class Discovery:
         vmid = int(g["vmid"])
         out = {"source": source, "node": node, "type": "VM" if kind == "qemu" else "LXC", "vmid": vmid,
                "name": g.get("name") or str(vmid), "status": g.get("status", "?"), "ip": None, "ip_from": None,
-               "os": "", "user": "root", "supported": True, "note": "", "must_run": vmid in must_run}
+               "os": "", "user": "root", "supported": True, "windows": False, "note": "", "must_run": vmid in must_run}
         try:
             conf = pve._get(f"/nodes/{node}/{kind}/{vmid}/config")
         except requests.RequestException:
@@ -70,7 +70,8 @@ class Discovery:
         if kind == "qemu":
             out["user"] = conf.get("ciuser") or "root"
             if WINDOWS.match(out["os"]):
-                out["supported"], out["note"] = False, "Windows: Jarvis's SSH checks are Linux-only"
+                out["windows"], out["user"] = True, conf.get("ciuser") or "Administrator"
+                out["note"] = "Windows: needs OpenSSH Server (setup steps below the table)"
 
         if g.get("status") == "running":
             try:
@@ -130,9 +131,11 @@ class Discovery:
         return sorted(guests, key=lambda g: (g["in_jarvis"] is not None, g["vmid"]))
 
 
-def add_guest(name: str, ip: str, user: str, key_file: str = "~/.ssh/jarvis_ed25519") -> tuple[int, str, bool]:
-    """Add a discovered guest as a Linux host and try logging in. Returns (index, test message, ok)."""
+def add_guest(name: str, ip: str, user: str, key_file: str = "~/.ssh/jarvis_ed25519",
+              os_type: str = "linux") -> tuple[int, str, bool]:
+    """Add a discovered guest as a host and try logging in. Returns (index, test message, ok)."""
     idx = S.save("linux_hosts", {"name": name, "host": ip, "user": user or "root", "key_file": key_file,
+                                 "os": "windows" if os_type == "windows" else "linux",
                                  "allow_commands": True, "command_timeout": 120})
     try:
         return idx, S.test("linux_hosts", idx), True

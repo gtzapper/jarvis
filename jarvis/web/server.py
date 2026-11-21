@@ -307,11 +307,19 @@ def create_app(state: State, password: str | None) -> Flask:
         from ..discovery import add_guest
         b = request.json or {}
         try:
-            idx, message, ok = add_guest(b.get("name", ""), b.get("ip", ""), b.get("user", "root"))
+            idx, message, ok = add_guest(b.get("name", ""), b.get("ip", ""), b.get("user", "root"), os_type=b.get("os", "linux"))
         except ValueError as e:
             return jsonify(ok=False, error=str(e)), 400
         state.reload()
         return jsonify(ok=True, index=idx, login_ok=ok, message=message)
+
+    @app.get("/api/windows-setup")
+    def windows_setup():
+        from ..collectors.windows import SETUP_SNIPPET
+        pub = Path("~/.ssh/jarvis_ed25519.pub").expanduser()
+        if not pub.exists():
+            return jsonify(ok=False, error="Create Jarvis's SSH key first (the SSH key box above)")
+        return jsonify(ok=True, snippet=SETUP_SNIPPET.replace("__KEY__", pub.read_text().strip()))
 
     @app.post("/api/discover/must_run")
     def discover_must_run():

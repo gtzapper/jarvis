@@ -360,10 +360,10 @@ async function scanProxmox() {
       const add = el("button", { class: "btn primary" }, "Add");
       add.onclick = async () => {
         add.disabled = true; result.className = "fhelp"; result.textContent = "Adding and testing SSH...";
-        const a = await api("/api/discover/add", { name: name.value, ip: g.ip, user: user.value });
+        const a = await api("/api/discover/add", { name: name.value, ip: g.ip, user: user.value, os: g.windows ? "windows" : "linux" });
         if (!a.ok) { result.className = "fhelp result bad"; result.textContent = a.error; add.disabled = false; return; }
         result.className = `fhelp result ${a.login_ok ? "ok" : "bad"}`;
-        result.textContent = a.login_ok ? "Added. " + a.message : "Added, but login failed: " + a.message + " (add Jarvis's SSH key to this guest, or fix the user in Setup > Linux VMs)";
+        result.textContent = a.login_ok ? "Added. " + a.message : "Added, but login failed: " + a.message + (g.windows ? " (run the Windows setup steps below on this VM)" : " (add Jarvis's SSH key to this guest, or fix the user in Setup > VMs / servers)");
         add.replaceWith(el("span", { class: "pill ok" }, "Added"));
       };
       action = el("div", { class: "row" }, name, user, add);
@@ -375,16 +375,29 @@ async function scanProxmox() {
       if (!w.ok) { watch.checked = !watch.checked; result.className = "fhelp result bad"; result.textContent = w.error; }
     };
     return el("tr", {},
-      el("td", {}, String(g.vmid)), el("td", {}, el("div", {}, g.name), el("div", { class: "kind" }, `${g.type} on ${g.node}`)),
+      el("td", {}, String(g.vmid)), el("td", {}, el("div", {}, g.name), el("div", { class: "kind" }, `${g.type}${g.windows ? " (Windows)" : ""} on ${g.node}`)),
       el("td", {}, el("span", { class: `pill ${g.status === "running" ? "ok" : "mute"}` }, g.status)),
       el("td", {}, g.ip ? [el("div", {}, g.ip), el("div", { class: "kind" }, g.ip_from)] : el("span", { class: "kind", title: g.note }, "-")),
       el("td", { style: "text-align:center" }, watch),
       el("td", {}, action, result));
   });
   const addable = r.guests.filter(g => !g.in_jarvis && g.ip && g.supported).length;
+  let winHelp = null;
+  if (r.guests.some(g => g.windows && !g.in_jarvis)) {
+    const box = el("pre", { class: "keybox", style: "white-space:pre-wrap" }, "Loading...");
+    const copy = el("button", { class: "btn" }, "Copy");
+    winHelp = el("details", { style: "margin-top:12px" }, el("summary", { style: "cursor:pointer;font-weight:600" }, "Windows VMs: turn on SSH first"),
+      el("p", { class: "help" }, "Jarvis talks to Windows over the built-in OpenSSH Server, with PowerShell. Run this in PowerShell as Administrator on each Windows VM, then click Add. The SSH user is an administrator account on that VM."),
+      box, copy);
+    api("/api/windows-setup").then(w => {
+      box.textContent = w.ok ? w.snippet : w.error;
+      copy.onclick = async () => { try { await navigator.clipboard.writeText(w.snippet); copy.textContent = "Copied"; } catch { copy.textContent = "Select and copy it manually"; } };
+    });
+  }
   put(card, el("div", { class: "row", style: "justify-content:space-between" }, el("strong", {}, "Discovered on Proxmox"), el("button", { class: "btn", onclick: scanProxmox }, "Scan again")),
     el("p", { class: "help", style: "margin:4px 0 10px" }, `${r.guests.length} guests, ${addable} can be added. "Alert if stopped" warns you whenever that guest isn't running.`),
-    el("div", { class: "tablewrap" }, el("table", {}, el("thead", {}, el("tr", {}, ["ID", "Name", "Status", "IP", "Alert if stopped", ""].map(h => el("th", {}, h)))), el("tbody", {}, rows))));
+    el("div", { class: "tablewrap" }, el("table", {}, el("thead", {}, el("tr", {}, ["ID", "Name", "Status", "IP", "Alert if stopped", ""].map(h => el("th", {}, h)))), el("tbody", {}, rows))),
+    winHelp);
 }
 function renderSsh(key) {
   const copy = el("button", { class: "btn", onclick: async () => { try { await navigator.clipboard.writeText(key); copy.textContent = "Copied"; } catch { copy.textContent = "Select and copy it manually"; } } }, "Copy");

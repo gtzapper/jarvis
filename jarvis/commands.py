@@ -11,7 +11,9 @@ from .media.downloaders import fmt_speed
 
 RISKY = re.compile(r"\brm\s+-\w*[rf]|\bmkfs|\bdd\s+if=|\b(shutdown|reboot|poweroff|halt)\b|>\s*/dev/(sd|nvme|vd)|\bwipefs|\bfdisk|\bparted"
                    r"|:\(\)\s*\{|\bchmod\s+-R|\bchown\s+-R|\buserdel|\bsystemctl\s+(stop|disable|mask)|\bdocker\s+(rm|system\s+prune|volume\s+rm)"
-                   r"|\bapt(-get)?\s+(remove|purge|autoremove)|\biptables\s+-F|\bkill(all)?\b", re.IGNORECASE)
+                   r"|\bapt(-get)?\s+(remove|purge|autoremove)|\biptables\s+-F|\bkill(all)?\b"
+                   r"|Remove-Item.*-Recurse|\b(Restart|Stop)-Computer\b|\bStop-(Service|Process)\b|\bFormat-Volume\b|\bClear-Disk\b"
+                   r"|\bdiskpart\b|\b(del|rd|rmdir)\s+/s|\bRemove-(LocalUser|VM|Partition)\b|\bDisable-NetAdapter\b", re.IGNORECASE)
 
 KINDS = {
     "movie": "movie", "movies": "movie", "film": "movie", "films": "movie",
@@ -270,7 +272,8 @@ class Assistant:
         hosts = self._hosts()
         if not hosts:
             return "No hosts are set up for commands. Add them under linux_hosts in config.yaml."
-        return "I can run commands on:\n" + "\n".join(f"  {h['name']}: {h.get('user', 'root')}@{h['host']}" for h in hosts)
+        return "I can run commands on:\n" + "\n".join(
+            f"  {h['name']}: {h.get('user', 'root')}@{h['host']}" + (" (Windows, PowerShell)" if h.get("os") == "windows" else "") for h in hosts)
 
     def discover(self, m) -> str:
         from .discovery import Discovery
@@ -298,7 +301,8 @@ class Assistant:
             return f"I don't know a host called '{m['host']}' that allows commands. Known: {names}."
         cmd = m["cmd"].strip()
         warning = "\n  WARNING: this looks destructive or disruptive." if RISKY.search(cmd) else ""
-        if not self.confirm(f"Run on {host['name']} ({host.get('user', 'root')}@{host['host']}):\n    {cmd}{warning}\nGo ahead?"):
+        shell = " in PowerShell" if host.get("os") == "windows" else ""
+        if not self.confirm(f"Run{shell} on {host['name']} ({host.get('user', 'root')}@{host['host']}):\n    {cmd}{warning}\nGo ahead?"):
             audit(f"run DECLINED on {host['name']}: {cmd}")
             return "Okay, not running it."
         timeout = host.get("command_timeout", 120)

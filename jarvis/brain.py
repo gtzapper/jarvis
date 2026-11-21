@@ -85,7 +85,8 @@ TOOLS = [
     {"name": "indexer_status", "description": "Prowlarr indexers and which are failing or disabled.", "input_schema": _schema({})},
     {"name": "test_indexers", "description": "Run Prowlarr's test on every indexer.", "input_schema": _schema({})},
     {"name": "list_hosts", "description": "Machines Jarvis can run shell commands on, with user and IP.", "input_schema": _schema({})},
-    {"name": "run_command", "description": "Run one shell command over SSH on a host from list_hosts and return its output (last 40 lines). "
+    {"name": "run_command", "description": "Run one command over SSH on a host from list_hosts and return its output (last 40 lines). "
+     "Linux hosts take shell commands; hosts marked Windows take PowerShell (e.g. Get-PSDrive C, Get-Service, Get-Process | Sort CPU -Desc | Select -First 10). "
      "Asks the user to confirm every time.",
      "input_schema": _schema({"host": {"type": "string"}, "command": {"type": "string"}})},
     {"name": "list_devices", "description": "Devices pfSense sees on the network (IP, MAC, hostname, interface). Optional filter.",

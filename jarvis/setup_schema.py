@@ -56,7 +56,8 @@ def _t_pfsense(cfg, e):
 
 def _t_ssh(cfg, e):
     from .collectors.ssh_host import run_command
-    code, out = run_command(e, "uname -sr && hostname", timeout=15)
+    probe = "(Get-CimInstance Win32_OperatingSystem).Caption; hostname" if e.get("os") == "windows" else "uname -sr && hostname"
+    code, out = run_command(e, probe, timeout=30)
     if code != 0:
         raise RuntimeError(out.strip() or f"exit {code}")
     return "SSH works: " + " / ".join(out.split())
@@ -137,9 +138,13 @@ SERVICES: list[Service] = [
             help="Paste the Jarvis SSH public key into Unraid: Users > root > SSH authorized keys.",
             fields=[f if f.key != "user" else Field("user", "SSH user", default="root") for f in SSH_FIELDS]
             + [Field("allow_commands", "Allow 'run ... on' commands (as root)", "bool", default=False)]),
-    Service("linux_hosts", "Linux VMs / servers", "Infrastructure", ("linux_hosts",), multi=True, test=_t_ssh,
+    Service("linux_hosts", "VMs / servers (Linux or Windows)", "Infrastructure", ("linux_hosts",), multi=True, test=_t_ssh,
             help="Create a 'jarvis' user on the VM and add the Jarvis SSH public key to ~jarvis/.ssh/authorized_keys.",
-            fields=SSH_FIELDS + [Field("allow_commands", "Allow 'run ... on' commands", "bool", default=True),
+            fields=SSH_FIELDS + [Field("os", "Operating system", "choice", default="linux", options=["linux", "windows"],
+                                       help="Windows needs OpenSSH Server; commands are PowerShell"),
+                                 Field("ignore_services", "Windows services to ignore", "list",
+                                       help="Service names that may be stopped without an alert"),
+                                 Field("allow_commands", "Allow 'run ... on' commands", "bool", default=True),
                                  Field("command_timeout", "Command timeout (seconds)", "int", default=120)]),
 
     Service("plex", "Plex", "Media", ("media", "plex"), test=_t_media("PlexClient"),

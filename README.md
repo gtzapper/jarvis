@@ -253,6 +253,28 @@ The test shows whether Ollama is reachable, whether the model is installed and w
 
 Switching between Claude and Ollama is just the Provider setting. Your API key stays saved either way.
 
+## Windows VMs and PCs
+Windows machines are monitored and controlled over the same SSH key, using Windows' built-in **OpenSSH Server** and **PowerShell**.
+
+**What Jarvis checks:**
+- CPU, memory, uptime and every drive's free space.
+- **Automatic services that crashed.** Services that stop themselves normally, like the Maps and Edge updaters, are ignored. Add your own under "Windows services to ignore".
+- **Waiting Windows updates**, checked every 6 hours because the search is slow.
+- **A pending restart** after updates.
+- Docker Desktop containers, if you use it.
+
+`run ... on gaming-pc` takes **PowerShell** commands, for example `run Get-PSDrive C on gaming-pc`. You confirm each one as usual, and destructive ones (`Restart-Computer`, `Remove-Item -Recurse`, `Stop-Service`…) get an extra warning.
+
+**Setup**, once per Windows machine. Setup → Discovered on Proxmox shows this snippet with Jarvis's key already filled in. Run it in PowerShell **as Administrator**:
+```
+Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0
+Set-Service sshd -StartupType Automatic; Start-Service sshd
+New-NetFirewallRule -Name sshd -DisplayName 'OpenSSH Server' -Protocol TCP -LocalPort 22 -Action Allow -ErrorAction SilentlyContinue
+Add-Content -Path "$env:ProgramData\ssh\administrators_authorized_keys" -Value '<Jarvis public key>'
+icacls "$env:ProgramData\ssh\administrators_authorized_keys" /inheritance:r /grant "Administrators:F" /grant "SYSTEM:F"
+```
+Then click **Add** in the discovered list. For a physical PC, add it under Setup → VMs / servers with Operating system = `windows`. The SSH user is an administrator account on that machine.
+
 ## Running commands on your VMs
 Any host under `linux_hosts` can take commands. Unraid hosts can too if you set `allow_commands: true` on them, since they run as root.
 ```

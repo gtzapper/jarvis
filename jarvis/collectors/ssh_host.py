@@ -5,6 +5,7 @@ import paramiko
 
 from ..config import env
 from ..models import Report, check_disk, check_usage, fmt_uptime, pct
+from . import windows
 
 KNOWN_HOSTS = Path("data/known_hosts")
 
@@ -80,6 +81,8 @@ def connect(cfg: dict) -> paramiko.SSHClient:
 
 def run_command(cfg: dict, command: str, timeout: int = 120) -> tuple[int | None, str]:
     """Run one command and return (exit code, combined output). Exit code is None on timeout."""
+    if cfg.get("os") == "windows":
+        command = windows.ps_wrap(command)  # Windows hosts take PowerShell
     c = connect(cfg)
     try:
         _, stdout, _ = c.exec_command(command, timeout=timeout)
@@ -100,6 +103,11 @@ class SSHCollector:
         self.cfg, self.th, self.kind = cfg, th, kind
         self.name = cfg["name"]
         self.must_run_containers = set(cfg.get("must_run_containers", []))
+        self.windows = cfg.get("os") == "windows"
+        if self.windows:
+            self.kind = "windows"
+            self.win_state = windows.WindowsState()
+            self.ignore_services = {s.lower() for s in cfg.get("ignore_services", [])}
 
     def _run(self, script: str) -> str:
         c = connect(self.cfg)
@@ -111,7 +119,22 @@ class SSHCollector:
         finally:
             c.close()
 
+    def _collect_windows(self) -> list[Report]:
+        check_updates = self.win_state.due()
+        c = connect(self.cfg)
+        try:
+            _, stdout, _ = c.exec_command(windows.ps_wrap(windows.script(check_updates)), timeout=150 if check_updates else 45)
+            output = stdout.read().decode(errors="replace")
+        finally:
+            c.close()
+        rep = Report(self.name, "windows")
+        rows = windows.report(rep, windows.parse(output), self.th, self.ignore_services, self.win_state, check_updates)
+        self._services(rep, {"docker": rows})
+        return [rep]
+
     def collect(self) -> list[Report]:
+        if self.windows:
+            return self._collect_windows()
         out = sections(self._run(UNRAID_SCRIPT if self.kind == "unraid" else LINUX_SCRIPT))
         rep = Report(self.name, self.kind)
         self._system(rep, out)
