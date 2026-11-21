@@ -288,6 +288,32 @@ icacls "$env:ProgramData\ssh\administrators_authorized_keys" /inheritance:r /gra
 ```
 Then click **Add** in the discovered list. For a physical PC, add it under Setup → VMs / servers with Operating system = `windows`. The SSH user is an administrator account on that machine.
 
+## Housekeeping: updates, restarts, cleanup
+Tell Jarvis to look after your machines, in chat or in plain English with the AI ("update the docker vm", "anything to update?", "restart sonarr"):
+
+| Say | What happens |
+|---|---|
+| `check updates on docker-vm` (or `on all`) | Lists waiting OS updates and containers with newer images. Image checks download the new images, but nothing that's running is touched |
+| `update docker-vm` | Installs OS updates **and** updates containers on that machine |
+| `update packages on X` / `update containers on X` | Just one of the two |
+| `update plex container on docker-vm` | Specific containers (comma-separate several) |
+| `update everything` | Every machine Jarvis may run commands on, in one go |
+| `restart sonarr on docker-vm` | Restart one container |
+| `clean up docker on X` | Remove unused images and build cache (containers and volumes are left alone) |
+| `reboot docker-vm` | Restart the machine |
+
+**Before anything changes, Jarvis shows you the exact list** (for example "nas: 3 OS updates (openssl, curl, libc6) and new images for 2 containers (sonarr, plex)") and waits for your yes. If an update needs a reboot, it asks separately. Everything goes to the Activity log.
+
+**How it does it:**
+- **OS updates:** it detects the package manager (apt, dnf, yum, apk, pacman, zypper). On Proxmox hosts it uses `dist-upgrade`, as Proxmox recommends. Config files you've changed are kept. If automatic updates are already running, it says so instead of fighting over the lock.
+- **Containers started with Docker Compose** are pulled and recreated with `docker compose up -d` for just those services. **Other containers** (plain `docker run`, or Unraid's Docker tab) get the new image downloaded, and Jarvis tells you to recreate them the way you created them. On Unraid that's "apply update" in the Docker tab. Rebuilding someone else's `docker run` command from memory isn't safe to guess.
+- **Root access:**
+  - Logging in as root works directly.
+  - Other users need **passwordless sudo**, or **password login** (Jarvis then answers sudo with that password).
+  - For containers, a user in the `docker` group is enough.
+
+**Not covered yet:** installing Windows updates (waiting updates are shown; install them with Windows Update), and Unraid OS updates (Tools → Update OS in Unraid).
+
 ## Running commands on your VMs
 Any host under `linux_hosts` can take commands. Unraid hosts can too if you set `allow_commands: true` on them, since they run as root.
 ```

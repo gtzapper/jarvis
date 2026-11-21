@@ -89,6 +89,22 @@ TOOLS = [
      "Linux hosts take shell commands; hosts marked Windows take PowerShell (e.g. Get-PSDrive C, Get-Service, Get-Process | Sort CPU -Desc | Select -First 10). "
      "Asks the user to confirm every time.",
      "input_schema": _schema({"host": {"type": "string"}, "command": {"type": "string"}})},
+    {"name": "check_updates", "description": "Check machines for waiting OS updates and newer container images (this downloads images but "
+     "changes nothing that's running). host = a name from list_hosts, or 'all'.",
+     "input_schema": _schema({"host": {"type": "string"}})},
+    {"name": "install_updates", "description": "Install OS updates and/or recreate containers with newer images on a machine, or 'all' machines. "
+     "Shows the user exactly what will be installed and asks to confirm, then offers a reboot if needed.",
+     "input_schema": _schema({"host": {"type": "string", "description": "Host name, or 'all'"},
+                              "packages": {"type": "boolean", "description": "Install OS package updates"},
+                              "containers": {"type": "boolean", "description": "Update Docker containers"}})},
+    {"name": "update_containers", "description": "Update specific Docker containers on one host to their newest image. Asks to confirm.",
+     "input_schema": _schema({"host": {"type": "string"}, "containers": {"type": "array", "items": {"type": "string"}}})},
+    {"name": "restart_container", "description": "Restart one Docker container on a host. Asks to confirm.",
+     "input_schema": _schema({"host": {"type": "string"}, "container": {"type": "string"}})},
+    {"name": "docker_cleanup", "description": "Remove unused Docker images and build cache on a host to free disk space. Asks to confirm.",
+     "input_schema": _schema({"host": {"type": "string"}})},
+    {"name": "reboot_host", "description": "Reboot a machine. Asks to confirm. Only when the user asked for a reboot or agreed to one.",
+     "input_schema": _schema({"host": {"type": "string"}})},
     {"name": "list_devices", "description": "Devices pfSense sees on the network (IP, MAC, hostname, interface). Optional filter.",
      "input_schema": _schema({"filter": {"type": ["string", "null"], "description": "Part of an IP, MAC or hostname, or null"}})},
     {"name": "create_vm", "description": "Create a VM on Proxmox from the cloud-init template, reserve a static IP on pfSense, start it and "
@@ -109,7 +125,9 @@ PROGRESS = {
     "search_media": "Searching", "add_media": "Adding it", "search_missing": "Starting the search", "list_requests": "Checking requests",
     "decide_requests": "Updating requests", "indexer_status": "Checking indexers", "test_indexers": "Testing indexers",
     "list_hosts": "Listing hosts", "run_command": "Running the command", "list_devices": "Asking pfSense", "create_vm": "Creating the VM",
-    "check_vm_setup": "Checking the VM setup",
+    "check_vm_setup": "Checking the VM setup", "check_updates": "Checking for updates", "install_updates": "Preparing updates",
+    "update_containers": "Checking those containers", "restart_container": "Restarting the container",
+    "docker_cleanup": "Cleaning up Docker", "reboot_host": "Rebooting",
 }
 
 
@@ -221,6 +239,12 @@ class Brain:
             "list_hosts": lambda: j.hosts(g()),
             "run_command": lambda: j.run(g(host=a["host"], cmd=a["command"])),
             "check_vm_setup": lambda: j.check_vm_setup(g()),
+            "check_updates": lambda: j.host_updates_check(g(host=a["host"])),
+            "install_updates": lambda: j.update_selected(a["host"], a["packages"], a["containers"]),
+            "update_containers": lambda: j.update_selected(a["host"], False, True, a["containers"]),
+            "restart_container": lambda: j.restart_container_cmd(g(host=a["host"], c=a["container"])),
+            "docker_cleanup": lambda: j.docker_cleanup_cmd(g(host=a["host"])),
+            "reboot_host": lambda: j.reboot_cmd(g(host=a["host"])),
         }
         if name not in handlers:
             raise ValueError(f"Unknown tool {name}")

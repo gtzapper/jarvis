@@ -104,14 +104,18 @@ def connect(cfg: dict) -> paramiko.SSHClient:
     return c
 
 
-def run_command(cfg: dict, command: str, timeout: int = 120) -> tuple[int | None, str]:
-    """Run one command and return (exit code, combined output). Exit code is None on timeout."""
+def run_command(cfg: dict, command: str, timeout: int = 120, stdin_data: str | None = None) -> tuple[int | None, str]:
+    """Run one command and return (exit code, combined output). Exit code is None on timeout.
+    stdin_data is sent to the command's input (e.g. a password for sudo -S)."""
     if cfg.get("os") == "windows":
         command = windows.ps_wrap(command)  # Windows hosts take PowerShell
     c = connect(cfg)
     try:
-        _, stdout, _ = c.exec_command(command, timeout=timeout)
+        stdin, stdout, _ = c.exec_command(command, timeout=timeout)
         stdout.channel.set_combine_stderr(True)
+        if stdin_data is not None:
+            stdin.write(stdin_data)
+            stdin.channel.shutdown_write()
         try:
             out = stdout.read().decode(errors="replace")
             return stdout.channel.recv_exit_status(), out

@@ -47,6 +47,13 @@ HELP = """Things I understand:
   create vm web1 [with 4 cores 8gb ram 64gb disk]   new VM from your template + static IP on pfSense
   check vm setup                 test the VM-creation permissions without changing anything
   check for updates / update jarvis   see what's new on GitHub, install it and restart
+  check updates on docker-vm     OS packages and container images waiting (or: on all)
+  update docker-vm               install OS updates and new container images (asks first)
+  update packages on X / update containers on X / update plex container on unraid
+  update everything              every machine Jarvis may run commands on
+  restart sonarr on docker-vm    restart one container
+  clean up docker on X           remove unused images and build cache
+  reboot docker-vm               restart the machine (asks first)
   new chat                       start a fresh AI conversation
   help                           this list
 With the AI brain set up, you can also just say what you want in plain English."""
@@ -90,6 +97,14 @@ class Assistant:
             (r"^check (vm|provisioning) setup$", self.check_vm_setup),
             (r"^(check for updates?|any updates|what version( are you)?|version)$", self.check_updates),
             (r"^(update|upgrade) (jarvis|yourself|the app)$", self.update_self),
+            (r"^check (for )?updates (on|for) (?P<host>all( (machines|hosts|servers))?|everything|[\w.-]+)$", self.host_updates_check),
+            (r"^(update|upgrade) (everything|all( (machines|hosts|servers))?)$", self.update_everything),
+            (r"^(update|upgrade) (?P<what>packages|the os|os|system|containers|all containers|everything) on (?P<host>[\w.-]+)$", self.update_host),
+            (r"^(update|upgrade) (the )?(?P<names>[\w.,\s-]+?) containers? on (?P<host>[\w.-]+)$", self.update_named_containers),
+            (r"^(update|upgrade) (?P<host>[\w.-]+)$", self.update_host),
+            (r"^restart (the )?(container )?(?P<c>[\w.-]+)( container)? on (?P<host>[\w.-]+)$", self.restart_container_cmd),
+            (r"^(clean ?up|prune) docker on (?P<host>[\w.-]+)$", self.docker_cleanup_cmd),
+            (r"^reboot (?P<host>[\w.-]+)$", self.reboot_cmd),
             (r"^(create|make|build|spin up|new) (a )?(new )?vm (called |named )?(?P<name>[\w-]+)(?P<spec> .+)?$", self.create_vm),
             (r"^(media status|media)$", self.media_status),
             (r"^(status|how('s| is) (everything|the lab|it going))$", self.lab_status),
@@ -343,6 +358,218 @@ class Assistant:
         if updater.restart_soon(3):
             return result["message"] + " Restarting now; I'll be back in a few seconds."
         return result["message"] + " Restart Jarvis to use the new version."
+
+    # ------------------------------------------------------------ housekeeping
+
+    def _host_named(self, name: str) -> dict:
+        host = next((h for h in self._hosts() if h["name"].lower() == str(name).lower()), None)
+        if not host:
+            names = ", ".join(h["name"] for h in self._hosts()) or "none"
+            raise _NotSetUp(f"I don't know a host called '{name}' that allows commands. Known: {names}.")
+        return host
+
+    def _plan(self, host: dict, packages: bool = True, containers: bool = True, names: list | None = None) -> dict:
+        from . import housekeeping as hk
+        plan = {"host": host, "packages": None, "containers": [], "notes": [], "errors": []}
+        if packages:
+            self.say(f"Checking {host['name']} for OS updates...")
+            try:
+                plan["packages"] = hk.check_packages(host)
+                if plan["packages"]["note"]:
+                    plan["notes"].append(plan["packages"]["note"])
+                plan["notes"] += plan["packages"]["warnings"]
+            except hk.HousekeepingError as e:
+                plan["errors"].append(str(e))
+        if containers and host.get("os") != "windows":
+            self.say(f"Checking {host['name']}'s containers for new images (this downloads them; nothing restarts yet)...")
+            try:
+                plan["containers"] = hk.check_containers(host, names)
+            except hk.HousekeepingError as e:
+                if names:
+                    raise
+                if "isn't running" not in str(e):
+                    plan["errors"].append(str(e))
+        return plan
+
+    @staticmethod
+    def _plan_work(plan: dict) -> tuple[list[str], list, list]:
+        pk = plan["packages"]
+        pkgs = pk["packages"] if pk and pk["pm"] in ("apt", "dnf", "yum", "apk", "pacman", "zypper") else []
+        ups = [c for c in plan["containers"] if c.get("status") == "update"]
+        parts = []
+        if pkgs:
+            shown = ", ".join(pkgs[:8]) + (f" and {len(pkgs) - 8} more" if len(pkgs) > 8 else "")
+            parts.append(f"{len(pkgs)} OS update(s) ({shown})")
+        if ups:
+            parts.append(f"new images for {len(ups)} container(s) ({', '.join(c['name'] for c in ups)})")
+        return parts, pkgs, ups
+
+    def _apply(self, plan: dict, pkgs: list, ups: list) -> tuple[list[str], bool]:
+        from . import housekeeping as hk
+        from .audit import audit
+        host, lines = plan["host"], []
+        name = host["name"]
+        reboot = bool(plan["packages"] and plan["packages"]["reboot"])
+        if pkgs:
+            self.say(f"Installing {len(pkgs)} OS update(s) on {name}. This can take several minutes...")
+            try:
+                r = hk.apply_packages(host, plan["packages"]["pm"], plan["packages"].get("proxmox"))
+                audit(f"housekeeping: installed {len(pkgs)} OS update(s) on {name}")
+                lines.append(f"{name}: installed {len(pkgs)} OS update(s).")
+                reboot = reboot or r["reboot"]
+            except hk.HousekeepingError as e:
+                audit(f"housekeeping: OS update FAILED on {name}: {e}")
+                lines.append(f"{name}: {e}")
+        if ups:
+            self.say(f"Recreating {len(ups)} container(s) on {name} with their new images...")
+            try:
+                for r in hk.apply_containers(host, ups):
+                    audit(f"housekeeping: container {r['name']} on {name}: {r['result']}")
+                    if r["result"] == "updated":
+                        lines.append(f"{name}: updated {r['name']}.")
+                    elif r["result"] == "manual":
+                        lines.append(f"{name}: {r['name']}: {r['detail']}.")
+                    else:
+                        lines.append(f"{name}: updating {r['name']} failed: {r['detail']}")
+            except hk.HousekeepingError as e:
+                lines.append(f"{name}: {e}")
+        return lines, reboot
+
+    def _offer_reboot(self, hosts: list) -> str:
+        from . import housekeeping as hk
+        from .audit import audit
+        if not hosts:
+            return ""
+        names = ", ".join(h["name"] for h in hosts)
+        verb = "needs" if len(hosts) == 1 else "need"
+        if not self.confirm(f"{names} {verb} a reboot to finish updating. Reboot now?\n  WARNING: anything running there stops until it's back."):
+            return f"\n{names} still {verb} a reboot. Say 'reboot <name>' when it suits you."
+        done = []
+        for h in hosts:
+            try:
+                hk.reboot(h)
+                audit(f"housekeeping: rebooted {h['name']}")
+                done.append(f"Rebooting {h['name']}.")
+            except hk.HousekeepingError as e:
+                done.append(str(e))
+        return "\n" + " ".join(done)
+
+    def _update(self, hosts: list, packages: bool, containers: bool, names: list | None = None) -> str:
+        from . import housekeeping as hk
+        plans, notes, work = [], [], []
+        for h in hosts:
+            try:
+                plans.append(self._plan(h, packages, containers, names))
+            except hk.HousekeepingError as e:
+                return str(e)
+        for p in plans:
+            parts, pkgs, ups = self._plan_work(p)
+            notes += [f"{p['host']['name']}: {n}" for n in p["notes"]]
+            if parts:
+                work.append((p, pkgs, ups, f"{p['host']['name']}: " + " and ".join(parts)))
+        tail = "".join(f"\n  note: {n}" for n in notes)
+        problems = [f"Couldn't check {p['host']['name']}: {e}" for p in plans for e in p["errors"]]
+        if not work:
+            failed = {p["host"]["name"] for p in plans if p["errors"]}
+            if len(failed) == len(plans):
+                return "\n".join(problems) + tail
+            ok = ("Everything else is up to date." if failed else
+                  "Everything is up to date." if len(hosts) > 1 else f"{hosts[0]['name']} is up to date.")
+            return "\n".join(problems + [ok]) + tail
+        tail = "".join(f"\n  {p}" for p in problems) + tail
+        summary = "\n".join("  " + w[3] for w in work)
+        if not self.confirm(f"Install these updates?\n{summary}"):
+            return "Okay, nothing was changed."
+        lines, reboot_hosts = [], []
+        for p, pkgs, ups, _ in work:
+            done, needs_reboot = self._apply(p, pkgs, ups)
+            lines += done
+            if needs_reboot:
+                reboot_hosts.append(p["host"])
+        return "\n".join(lines) + tail + self._offer_reboot(reboot_hosts)
+
+    def host_updates_check(self, m) -> str:
+        target = m["host"] or "all"
+        hosts = self._hosts() if target.startswith("all") or target == "everything" else [self._host_named(target)]
+        if not hosts:
+            raise _NotSetUp("No hosts are set up for commands yet. Add them in Setup.")
+        out = []
+        for h in hosts:
+            plan = self._plan(h)
+            parts, _, _ = self._plan_work(plan)
+            status = "; ".join(parts) if parts else ("couldn't check" if plan["errors"] else "up to date")
+            if plan["packages"] and plan["packages"]["reboot"]:
+                status += "; a reboot is pending"
+            fails = [c["name"] for c in plan["containers"] if c.get("status") == "pullfail"]
+            if fails:
+                status += f"; couldn't check {', '.join(fails)} (local or private images)"
+            out.append(f"{h['name']}: {status}" + "".join(f"\n  problem: {e}" for e in plan["errors"])
+                       + "".join(f"\n  note: {n}" for n in plan["notes"]))
+        installable = any(("update(s)" in o.split("\n")[0] or "new images" in o.split("\n")[0]) for o in out)
+        return "\n".join(out) + ("\nSay 'update <name>' (or 'update everything') to install." if installable else "")
+
+    def update_host(self, m) -> str:
+        host = self._host_named(m["host"])
+        what = (m["what"] or "everything").replace("all ", "")
+        return self._update([host], what in ("everything", "packages", "the os", "os", "system"), what in ("everything", "containers"))
+
+    def update_named_containers(self, m) -> str:
+        host = self._host_named(m["host"])
+        names = [n for n in re.split(r"[,\s]+", m["names"]) if n and n != "and"]
+        return self._update([host], False, True, names)
+
+    def update_everything(self, m) -> str:
+        hosts = self._hosts()
+        if not hosts:
+            raise _NotSetUp("No hosts are set up for commands yet. Add them in Setup.")
+        return self._update(hosts, True, True)
+
+    def update_selected(self, host: str, packages: bool, containers: bool, names: list | None = None) -> str:
+        """For the AI: host 'all' means every machine."""
+        if names:
+            return self._update([self._host_named(host)], False, True, names)
+        hosts = self._hosts() if host.lower() in ("all", "everything") else [self._host_named(host)]
+        return self._update(hosts, packages, containers)
+
+    def restart_container_cmd(self, m) -> str:
+        from . import housekeeping as hk
+        from .audit import audit
+        host = self._host_named(m["host"])
+        if not self.confirm(f"Restart container {m['c']} on {host['name']}?"):
+            return "Okay, left it alone."
+        try:
+            name = hk.restart_container(host, m["c"])
+        except hk.HousekeepingError as e:
+            return str(e)
+        audit(f"housekeeping: restarted container {name} on {host['name']}")
+        return f"Restarted {name} on {host['name']}."
+
+    def docker_cleanup_cmd(self, m) -> str:
+        from . import housekeeping as hk
+        from .audit import audit
+        host = self._host_named(m["host"])
+        if not self.confirm(f"Remove unused Docker images and build cache on {host['name']}? Containers and volumes "
+                            "aren't touched; an image is downloaded again if something needs it later."):
+            return "Okay, nothing was removed."
+        try:
+            result = hk.docker_cleanup(host)
+        except hk.HousekeepingError as e:
+            return str(e)
+        audit(f"housekeeping: docker cleanup on {host['name']}: {result}")
+        return result
+
+    def reboot_cmd(self, m) -> str:
+        from . import housekeeping as hk
+        from .audit import audit
+        host = self._host_named(m["host"])
+        if not self.confirm(f"Reboot {host['name']} ({host['host']}) now?\n  WARNING: anything running there stops until it's back."):
+            return "Okay, not rebooting."
+        try:
+            hk.reboot(host)
+        except hk.HousekeepingError as e:
+            return str(e)
+        audit(f"housekeeping: rebooted {host['name']}")
+        return f"Rebooting {host['name']}. It should be back in a minute or two."
 
     # ------------------------------------------------------------ VMs
 
