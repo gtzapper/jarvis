@@ -48,13 +48,20 @@ def print_reports(reports: list[Report]) -> None:
 
 
 class Notifier:
+    chat_hook = None  # set by the web server: also send to linked Telegram/Discord/Matrix/Signal accounts
+
     def __init__(self, cfg: dict):
         self.ntfy_url = env((cfg.get("notify") or {}).get("ntfy_url_env"))
 
-    def send(self, title: str, message: str, critical: bool = False, resolved: bool = False) -> None:
+    def send(self, title: str, message: str, critical: bool = False, resolved: bool = False, ntfy: bool = True) -> None:
         stamp = datetime.now().strftime("%H:%M:%S")
         print(f"[{stamp}] {title}: {message}")
-        if not self.ntfy_url:
+        if Notifier.chat_hook:
+            try:
+                Notifier.chat_hook(title, message)
+            except Exception as e:
+                print(f"[{stamp}] (chat apps failed: {e})")
+        if not self.ntfy_url or not ntfy:
             return
         tag = "white_check_mark" if resolved else ("rotating_light" if critical else "warning")
         try:

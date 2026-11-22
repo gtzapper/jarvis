@@ -513,6 +513,24 @@ For everyone:
   - a warning if a proxy is forwarding without being listed;
   - who hasn't set up codes yet, and the recent failed sign-ins.
 
+## Chat apps: Telegram, Discord, Matrix, Signal
+Talk to Jarvis from the messaging app you already use, and get your alerts and reminders there. All four connect outwards, so no ports need opening.
+
+**Set up a bot** (Setup → Chat apps):
+- **Telegram:** message @BotFather, `/newbot`, paste the token.
+- **Discord:** discord.com/developers → New Application → Bot → Reset Token, paste it. Turn off *Public Bot*. No privileged intents are needed. Test gives you a link to add the bot to a server you're in, so you can DM it.
+- **Matrix:** make an account for Jarvis on your homeserver, copy its access token (Element: Settings → Help & About), and give the homeserver URL. Chats must have **encryption off** (Element: New room → Show advanced).
+- **Signal:** `docker compose --profile signal up -d`. Jarvis needs a number of its own (a spare SIM or landline). Save, then open `/api/setup/signal/qr` on your Jarvis address and scan it in Signal → Settings → Linked devices.
+
+**Link each person:** in the dashboard, your name at the bottom of the menu → **Chat apps → Link** shows a code; send `/link 123456` to the bot. The code works once, for 10 minutes. Family members link their own; they get their limited Jarvis and only their own reminders.
+
+**Safety:**
+- Only linked people get answers. A stranger gets one "I don't know you" reply an hour; 5 wrong link codes ignore that account for 15 minutes and send you an alert.
+- Messages from chat apps count as **outside home**: with *Admins away from home: limited*, reboots, shell commands, updates and deleting stay off.
+- Anything that changes the lab still asks first: Yes/No buttons in Telegram and Discord, a typed yes/no (or your authenticator code) in Matrix and Signal. Only the person who asked can answer; the same question also shows in the dashboard.
+- Direct messages only: group chats and Discord server channels are ignored. Messages older than 5 minutes (Jarvis was down) are dropped, so nothing reboots hours later.
+- Setup → Reminders & daily report → **Send to chat apps** turns delivery off.
+
 ## Permission modes (Ask, Auto, Read-only)
 Like Claude Code, Jarvis has modes for how much it may do without asking. Switch them with the pill above the chat box, or type `ask mode`, `auto mode` or `read-only mode` (`mode` shows the current one).
 

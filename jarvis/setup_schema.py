@@ -44,8 +44,18 @@ class Service:
 
 def _t_proxmox(cfg, e):
     from .collectors.proxmox import ProxmoxCollector
-    v = ProxmoxCollector(e, cfg["thresholds"])._get("/version")
-    return f"Connected to Proxmox {v.get('version', '?')}"
+    pve = ProxmoxCollector(e, cfg["thresholds"])
+    v = pve._get("/version")
+    problem = pve.access_problem()
+    if problem:
+        raise RuntimeError(f"Connected to Proxmox {v.get('version', '?')}, but: {problem}")
+    vms = cts = 0
+    nodes = [n for n in pve._get("/nodes") if n.get("status") == "online"]
+    for n in nodes:
+        vms += sum(1 for g in pve._get(f"/nodes/{n['node']}/qemu") if not g.get("template"))
+        cts += sum(1 for g in pve._get(f"/nodes/{n['node']}/lxc") if not g.get("template"))
+    return (f"Connected to Proxmox {v.get('version', '?')}: {', '.join(n['node'] for n in nodes) or 'no online nodes'}, "
+            f"{vms} VM{'s' * (vms != 1)} and {cts} container{'s' * (cts != 1)}")
 
 
 def _t_pfsense(cfg, e):
@@ -88,6 +98,50 @@ def _t_notify(cfg, e):
         raise RuntimeError("No ntfy URL set")
     n.send("Jarvis", "Test notification from setup. Jarvis can reach you.")
     return "Test notification sent. Check your phone"
+
+
+def _chat_bridge(app, cfg):
+    from . import chatapps
+    b = {x.app: x for x in chatapps.BRIDGES}[app](None)
+    s = b.configured({**cfg, "chat": {**(cfg.get("chat") or {}), app: {**((cfg.get("chat") or {}).get(app) or {}), "enabled": True}}})
+    if not s:
+        raise RuntimeError("Fill in the required fields first")
+    b.s = s
+    return b
+
+
+def _t_telegram(cfg, e):
+    b = _chat_bridge("telegram", cfg)
+    me = b.call("getMe")
+    return f"Connected as @{me.get('username')}. Each person links their Telegram under their name at the bottom of the menu > Chat apps"
+
+
+def _t_discord(cfg, e):
+    b = _chat_bridge("discord", cfg)
+    me = b.rest("GET", "/users/@me")
+    app = b.rest("GET", "/oauth2/applications/@me")
+    link = f"https://discord.com/oauth2/authorize?client_id={app['id']}&scope=bot"
+    return (f"Connected as {me.get('username')}. Add it to a server you're in (it needs no permissions): {link} . "
+            "Then each person links Discord under their name in the menu > Chat apps and DMs the bot")
+
+
+def _t_matrix(cfg, e):
+    b = _chat_bridge("matrix", cfg)
+    me = b.call("GET", "/account/whoami")["user_id"]
+    return f"Connected as {me}. Start a chat with it (encryption off), then link it under your name in the menu > Chat apps"
+
+
+def _t_signal(cfg, e):
+    import requests
+    b = _chat_bridge("signal", cfg)
+    try:
+        accounts = requests.get(f"{b.s['url']}/v1/accounts", timeout=10).json()
+    except (requests.RequestException, ValueError) as ex:
+        raise RuntimeError(f"Can't reach signal-cli-rest-api at {b.s['url']}: {ex}") from None
+    if b.s["number"] not in (accounts or []):
+        raise RuntimeError(f"{b.s['number']} isn't linked yet. Save, then open /api/setup/signal/qr on your Jarvis address in a "
+                           "new tab and scan it in Signal: Settings > Linked devices > Link new device")
+    return f"Signal works as {b.s['number']}. Each person links their Signal under their name in the menu > Chat apps"
 
 
 def _t_location(cfg, e):
@@ -164,7 +218,8 @@ SSH_FIELDS = [
 SERVICES: list[Service] = [
     Service("proxmox", "Proxmox", "Infrastructure", ("proxmox",), multi=True, test=_t_proxmox,
             help="Read-only token. In the Proxmox shell run: pveum user add jarvis@pve; pveum aclmod / -user jarvis@pve -role PVEAuditor; "
-                 "pveum user token add jarvis@pve monitor --privsep 0",
+                 "pveum user token add jarvis@pve monitor --privsep 0. Making the token in the web UI instead? Untick "
+                 "'Privilege Separation', or Proxmox shows Jarvis no VMs or containers.",
             fields=[Field("name", "Name", default="proxmox", required=True),
                     Field("host", "IP address", required=True), Field("port", "Port", "int", default=8006),
                     Field("token_id_env", "Token ID", "secret", env="PVE_TOKEN_ID", required=True, help="e.g. jarvis@pve!monitor"),
@@ -365,12 +420,41 @@ SERVICES: list[Service] = [
             fields=[Field("ntfy", "Send by ntfy push", "bool", default=True),
                     Field("app", "Show in the Jarvis app", "bool", default=True),
                     Field("spoken", "Speak on listening devices", "bool", default=True),
+                    Field("chat", "Send to chat apps", "bool", default=True,
+                          help="Telegram, Discord, Matrix or Signal, for everyone who linked one. Family members get only their own reminders"),
                     Field("report_time", "Daily report time", default="08:00", help="24-hour time, e.g. 07:30. Blank = no daily report"),
                     Field("quiet_hours", "Quiet hours for spoken messages", default="22:00-07:00",
                           help="Listening devices stay silent in this window (reminders still go to your phone). Blank = never quiet")]),
     Service("notify", "Phone alerts (ntfy)", "Alerts", ("notify",), test=_t_notify,
             help="Install the ntfy app, subscribe to a long random topic, use https://ntfy.sh/<topic>.",
             fields=[Field("ntfy_url_env", "ntfy URL", "secret", env="NTFY_URL", required=True)]),
+    Service("telegram", "Telegram", "Chat apps", ("chat", "telegram"), test=_t_telegram,
+            help="Talk to Jarvis from Telegram, and get alerts and reminders there. In Telegram, message @BotFather: /newbot, pick a "
+                 "name, and paste the token it gives you here. Each person then links their own Telegram under their name at the "
+                 "bottom of the menu > Chat apps. Only linked people get answers; approvals use Yes/No buttons.",
+            fields=[Field("token_env", "Bot token", "secret", env="TELEGRAM_BOT_TOKEN", required=True),
+                    Field("enabled", "On", "bool", default=True)]),
+    Service("discord", "Discord", "Chat apps", ("chat", "discord"), test=_t_discord,
+            help="Talk to Jarvis in Discord direct messages. discord.com/developers > New Application > Bot: Reset Token and paste it "
+                 "here (no privileged intents needed; turn off Public Bot). Test gives you a link to add the bot to a server you're in, "
+                 "so you can DM it. Each person links their Discord under their name in the menu > Chat apps.",
+            fields=[Field("token_env", "Bot token", "secret", env="DISCORD_BOT_TOKEN", required=True),
+                    Field("enabled", "On", "bool", default=True)]),
+    Service("matrix", "Matrix", "Chat apps", ("chat", "matrix"), test=_t_matrix,
+            help="Talk to Jarvis from Element or any Matrix app. Create an account for Jarvis on your homeserver (e.g. @jarvis:example.com), "
+                 "sign in to it once in Element and copy Settings > Help & About > Access token. Chats must have encryption turned off "
+                 "(Element: New room > Show advanced). Jarvis joins rooms it's invited to and answers only linked people.",
+            fields=[Field("homeserver", "Homeserver URL", required=True, help="e.g. https://matrix.example.com (not the @user part)"),
+                    Field("token_env", "Access token", "secret", env="MATRIX_ACCESS_TOKEN", required=True),
+                    Field("verify_tls", "Check certificate", "bool", default=True),
+                    Field("enabled", "On", "bool", default=True)]),
+    Service("signal", "Signal", "Chat apps", ("chat", "signal"), test=_t_signal,
+            help="Talk to Jarvis from Signal. Needs signal-cli-rest-api: 'docker compose --profile signal up -d' (the address below "
+                 "is the default). Jarvis uses a phone number of its own (a spare SIM or landline is best), linked like a desktop: "
+                 "save, then Test shows how. Each person links their Signal under their name in the menu > Chat apps.",
+            fields=[Field("api_url", "signal-cli-rest-api address", default="http://signal:8080", required=True),
+                    Field("number", "Jarvis's Signal number", required=True, help="With country code, e.g. +447700900123"),
+                    Field("enabled", "On", "bool", default=True)]),
     Service("discovery", "Proxmox discovery defaults", "Infrastructure", ("discovery",),
             help="How Setup > Discovered on Proxmox pre-fills the Add form. Username 'guest name' tries each VM/LXC's own "
                  "name as the SSH user; 'fixed user' uses one name for all. A default password is tried when you pick "

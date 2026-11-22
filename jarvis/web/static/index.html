@@ -637,6 +637,10 @@ const SVC_META = {
   provisioning: ["Vm+", "#10b981", "Create VMs from a template with a static IP on pfSense"],
   ai: ["AI", "#d97757", "Talk to Jarvis in plain English (Claude or a local model)"],
   notify: ["nt", "#38bdf8", "Push alerts to your phone with the ntfy app"],
+  telegram: ["Tg", "#2aabee", "Chat with Jarvis and get alerts in Telegram"],
+  discord: ["Dc", "#5865f2", "Chat with Jarvis in Discord direct messages"],
+  matrix: ["Mx", "#0dbd8b", "Chat from Element or any Matrix app"],
+  signal: ["Sg", "#3a76f0", "Chat with Jarvis in Signal"],
   email: ["@", "#f43f5e", "Gmail, Outlook, Proton and others: new mail sorted and summarised by your local AI"],
   email_ai: ["@AI", "#fb7185", "Which local model reads your email (never a cloud AI)"],
   voice: ["Mic", "#a855f7", "Hey Jarvis: speech-to-text and voice for listening devices"],
@@ -652,7 +656,7 @@ const SVC_META = {
   updates: ["Up", "#94a3b8", "GitHub token, only needed for a private repo"],
   web: ["Wb", "#60a5fa", "Dashboard password and who can open it"],
 };
-const GROUP_ORDER = ["Infrastructure", "Media", "Downloads", "AI & automation", "Email", "Planner", "Alerts", "Jarvis"];
+const GROUP_ORDER = ["Infrastructure", "Media", "Downloads", "AI & automation", "Email", "Planner", "Alerts", "Chat apps", "Jarvis"];
 let setupData = null, setupTab = "All", openSvc = null;
 
 function svcIcon(id, cls = "ico") {
@@ -1589,11 +1593,35 @@ function accountDialog() {
     }
   };
   if (ME.id) drawTfa();
+  const chatBox = el("div");
+  const drawChat = async () => {
+    const d = await api("/api/me/chat");
+    if (!d.apps || !d.apps.length) { put(chatBox, el("p", { class: "help", style: "margin:0" }, ME.role === "admin" ?
+      "Talk to Jarvis from Telegram, Discord, Matrix or Signal: set one up in Setup > Chat apps." : "No chat apps set up yet. Ask an admin.")); return; }
+    put(chatBox, el("p", { class: "help", style: "margin:0 0 6px" }, "Chat with Jarvis from your phone's messaging app, and get your reminders there."),
+      d.apps.map(a => {
+        const out = el("div", { class: "result" });
+        return el("div", {}, el("div", { class: "item" },
+          el("span", { class: "dot", style: `background:${a.linked ? "var(--ok)" : a.connected ? "var(--line)" : "var(--warn)"}` }),
+          el("div", { class: "grow" }, el("div", {}, a.label), el("div", { class: "when" }, a.linked ? "linked" + (a.handle ? " · bot " + a.handle : "") : a.connected ? "not linked" : "the bot isn't connected right now")),
+          el("div", { class: "acts" }, a.linked
+            ? el("button", { class: "btn", onclick: async () => { await api("/api/me/chat/unlink", { app: a.app }); drawChat(); } }, "Unlink")
+            : el("button", { class: "btn primary", onclick: async () => {
+                const r = await api("/api/me/chat/link", { app: a.app });
+                if (!r.ok) { out.className = "result bad"; out.textContent = r.error; return; }
+                out.className = "result ok";
+                put(out, r.text, el("br"), el("span", { class: "help" }, `The code works once, for ${r.minutes} minutes. `),
+                  el("button", { class: "btn", onclick: drawChat }, "Done"));
+              } }, "Link"))), out);
+      }));
+  };
+  if (ME.id) drawChat();
   const outAll = el("p", { class: "result" });
   put(dlg, el("div", { style: "padding:18px;max-width:380px" },
     el("h2", { style: "margin:0 0 4px" }, ME.name), el("p", { class: "help" }, `${ME.username} · ${ME.role === "admin" ? "Admin" : "Family"}${ME.sso ? " · single sign-on" : ""} · ${ME.home ? "at home" : "outside home (" + ME.ip + ")"}`),
     ME.id ? [el("div", { class: "day-head" }, ME.has_password ? "Change password" : "Set a password"), cur, nw, save, res,
       el("div", { class: "day-head" }, "Two-factor sign-in"), tfa,
+      el("div", { class: "day-head" }, "Chat apps"), chatBox,
       el("div", { class: "day-head" }, "Devices"),
       el("button", { class: "btn", onclick: async () => { const r = await api("/api/me/signout-all", {}); outAll.className = "result " + (r.ok ? "ok" : "bad");
         outAll.textContent = r.ok ? "Signed out on every other device and browser." : r.error; } }, "Sign out everywhere else"), outAll] :
@@ -1657,7 +1685,7 @@ async function loadUsers() {
   const row = u => el("div", { class: "item" },
     el("span", { class: "dot", style: `background:${u.disabled ? "var(--line)" : u.role === "admin" ? "var(--accent)" : "var(--ok)"}` }),
     el("div", { class: "grow" }, el("div", {}, `${u.name} `, el("span", { class: "role" }, u.role === "admin" ? "Admin" : "Family"), u.disabled ? " (switched off)" : ""),
-      el("div", { class: "when" }, [u.username, u.email, u.sso ? "SSO linked" : "", u.has_password ? "password" : "no password", u.last_login ? "last in " + u.last_login.replace("T", " ") : "never signed in"].filter(Boolean).join(" · "))),
+      el("div", { class: "when" }, [u.username, u.email, u.sso ? "SSO linked" : "", Object.keys(u.chat || {}).map(k => ({ telegram: "Telegram", discord: "Discord", matrix: "Matrix", signal: "Signal" })[k] || k).join(", "), u.has_password ? "password" : "no password", u.last_login ? "last in " + u.last_login.replace("T", " ") : "never signed in"].filter(Boolean).join(" · "))),
     el("div", { class: "acts" },
       el("button", { class: "btn", title: "Switch between admin and family", onclick: () => change(u, { role: u.role === "admin" ? "family" : "admin" }) }, u.role === "admin" ? "Make family" : "Make admin"),
       el("button", { class: "btn", onclick: () => { const p = prompt(`New password for ${u.name} (8+ characters, blank removes it):`); if (p !== null) change(u, { password: p }, "Password updated."); } }, "Password"),

@@ -7,3 +7,4 @@ waitress>=3.0
 anthropic>=2.12
 segno>=1.6
 pypdf>=4.0
+websocket-client>=1.8

@@ -58,6 +58,7 @@ class State:
         self.lock = threading.RLock()
         self.job_lock = threading.Lock()  # one command at a time keeps 'remove download 2' style references sane
         self.jobs: dict[str, Job] = {}
+        self.chat = None  # chatapps.Hub, started by serve()
         self.wake = threading.Event()
         self.reload()
 
@@ -100,7 +101,7 @@ class State:
     def planner_cfg(self) -> dict:
         with self.lock:
             p = dict(self.cfg.get("planner") or {})
-        return {"ntfy": p.get("ntfy", True), "app": p.get("app", True), "spoken": p.get("spoken", True),
+        return {"ntfy": p.get("ntfy", True), "app": p.get("app", True), "spoken": p.get("spoken", True), "chat": p.get("chat", True),
                 "report_time": p.get("report_time", "08:00") if "report_time" in p else "08:00",
                 "quiet_hours": p.get("quiet_hours", "22:00-07:00") if "quiet_hours" in p else "22:00-07:00"}
 
@@ -164,8 +165,7 @@ class State:
                 for r in new:
                     for title, text in r.get("events") or []:
                         organizer.record("mail", title, text)
-                        if p["ntfy"]:
-                            notifier.send(title, text)
+                        notifier.send(title, text, ntfy=p["ntfy"])
                 if not entry.get("notify_important", True):
                     continue
                 for r in new:
@@ -178,8 +178,7 @@ class State:
                     else:
                         continue
                     organizer.record("mail", title, text)
-                    if p["ntfy"]:
-                        notifier.send(title, text)
+                    notifier.send(title, text, ntfy=p["ntfy"])
             time.sleep(60)
 
     def scheduler_loop(self):
@@ -195,8 +194,7 @@ class State:
                 from .. import mail as _mail
                 renewals = [("mail", t, x) for t, x in _mail.renewal_notices()] if self.cfg.get("email") else []
                 for kind, title, text in organizer.due_now() + life.habit_checkins() + renewals:
-                    if p["ntfy"]:
-                        notifier.send(title, text)
+                    notifier.send(title, text, ntfy=p["ntfy"])
                 sec = (self.cfg.get("security_watch") or {})
                 day, at = sec.get("digest_day", "sunday"), sec.get("digest_time", "10:00")
                 if day != "off" and time.strftime("%A").lower() == day and organizer.report_due(at, key="digest"):
@@ -205,8 +203,7 @@ class State:
                         reports = list(self.monitor.reports)
                     text = security.digest(self.cfg, reports)
                     organizer.record("report", "Security digest", text)
-                    if p["ntfy"]:
-                        notifier.send("Security digest", text)
+                    notifier.send("Security digest", text, ntfy=p["ntfy"])
                 with self.lock:
                     keep = int((self.cfg.get("location_tracking") or {}).get("keep_days") or 365)
                 if organizer.report_due("03:00", key="locprune"):
@@ -220,15 +217,13 @@ class State:
                         from ..media import insights
                         try:
                             for title, text in insights.check_ready(stack):
-                                if p["ntfy"]:
-                                    notifier.send(title, text)
+                                notifier.send(title, text, ntfy=p["ntfy"])
                         except Exception as e:
                             print(f"media requests: {e}")
                 if organizer.report_due(p["report_time"]):
                     text = self.build_report()
                     organizer.record("report", "Daily report", text)
-                    if p["ntfy"]:
-                        notifier.send("Daily report", text)
+                    notifier.send("Daily report", text, ntfy=p["ntfy"])
             except Exception as e:  # keep reminders alive whatever happens
                 print(f"scheduler error: {e}")
             time.sleep(30)
@@ -327,8 +322,8 @@ def create_app(state: State, password: str | None) -> Flask:
         return None if auth_required() else OWNER
 
     # What a family member may use. Everything else (Setup, the lab, email, approvals...) is admin only.
-    FAMILY = [("GET", r"/api/(me|mode|ai|weather|outbox|pending|life|planner|media/watch|media/requests)"),
-              ("POST", r"/api/me/(password|2fa/\w+|signout-all)|/logout|/api/chat(/reset)?|/api/chat/[\w-]+/answer|/api/media/request"),
+    FAMILY = [("GET", r"/api/(me|me/chat|mode|ai|weather|outbox|pending|life|planner|media/watch|media/requests)"),
+              ("POST", r"/api/me/(password|2fa/\w+|signout-all|chat/(link|unlink))|/logout|/api/chat(/reset)?|/api/chat/[\w-]+/answer|/api/media/request"),
               ("GET", r"/api/chat/[\w-]+"),
               ("POST", r"/api/life/item(/\d+/(check|uncheck|delete))?|/api/life/clear|/api/planner/(note|reminder)(/\d+/delete)?")]
 
@@ -763,6 +758,34 @@ def create_app(state: State, password: str | None) -> Flask:
             return jsonify(ok=True)
         abort(404)
 
+    @app.get("/api/me/chat")
+    def me_chat():
+        from .. import chatapps
+        hub = state.chat
+        mine = (users.get(g.user.get("id")) or {}).get("chat") or {}
+        apps = [dict(a, linked=str(mine.get(a["app"]) or "")) for a in (hub.status() if hub else []) if a["configured"]]
+        return jsonify(apps=apps, has_account=bool(g.user.get("id")), labels=chatapps.APPS)
+
+    @app.post("/api/me/chat/<action>")
+    def me_chat_change(action):
+        from .. import chatapps
+        uid, app_ = g.user.get("id"), str((request.json or {}).get("app") or "")
+        if not uid:
+            return jsonify(ok=False, error="Add yourself in Setup > Users first, so Jarvis knows whose chat app this is.")
+        if app_ not in chatapps.APPS or not state.chat:
+            return jsonify(ok=False, error="Unknown chat app")
+        if action == "link":
+            b = state.chat.bridges[app_]
+            code = state.chat.link_code(uid)
+            where = {"telegram": f"Telegram, to {b.handle or 'your Jarvis bot'}", "discord": f"Discord, as a direct message to {b.handle or 'your Jarvis bot'}",
+                     "matrix": f"Matrix: start a chat with {b.handle or 'the Jarvis account'} (encryption off)",
+                     "signal": f"Signal, to {b.handle or 'the Jarvis number'}"}[app_]
+            return jsonify(ok=True, code=code, minutes=chatapps.LINK_TTL // 60, text=f"In {where}, send:  /link {code}")
+        if action == "unlink":
+            state.chat.unlink(uid, app_)
+            return jsonify(ok=True)
+        abort(404)
+
     @app.post("/api/me/signout-all")
     def me_signout_all():
         u = g.user
@@ -1013,6 +1036,21 @@ def create_app(state: State, password: str | None) -> Flask:
             except Exception as e:
                 result["test"] = {"ok": False, "message": str(e)}
         return jsonify(result)
+
+    @app.get("/api/setup/signal/qr")
+    def signal_qr():
+        """Link Jarvis's Signal number like a desktop: this proxies signal-cli-rest-api's QR code (that service isn't exposed)."""
+        import requests as rq
+        with state.lock:
+            e = (state.cfg.get("chat") or {}).get("signal") or {}
+        url = (e.get("api_url") or "http://signal:8080").rstrip("/")
+        try:
+            r = rq.get(f"{url}/v1/qrcodelink", params={"device_name": "Jarvis"}, timeout=30)
+        except rq.RequestException as ex:
+            return f"Can't reach signal-cli-rest-api at {url}: {ex}", 502
+        if r.status_code >= 400 or not r.headers.get("Content-Type", "").startswith("image/"):
+            return f"signal-cli-rest-api said: {r.text[:300]}", 502
+        return r.content, 200, {"Content-Type": r.headers["Content-Type"], "Cache-Control": "no-store"}
 
     @app.post("/api/setup/<sid>/test")
     def setup_test(sid):
@@ -1559,12 +1597,12 @@ def create_app(state: State, password: str | None) -> Flask:
     # ------------------------------------------------------------ location
 
     def _location_fired(fired):
-        if fired and state.planner_cfg()["ntfy"]:
+        if fired:
             from ..monitor import Notifier
             with state.lock:
                 n = Notifier(state.cfg)
             for _, title, text in fired:
-                n.send(title, text)
+                n.send(title, text, ntfy=state.planner_cfg()["ntfy"])
 
     @app.post("/api/location/owntracks")
     def owntracks_in():
@@ -1842,6 +1880,11 @@ def serve(host: str | None = None, port: int | None = None, monitor: bool = True
     threading.Thread(target=state.scheduler_loop, daemon=True).start()
     threading.Thread(target=state.mail_loop, daemon=True).start()
     threading.Thread(target=state.docs_loop, daemon=True).start()
+    from ..chatapps import Hub
+    from ..monitor import Notifier
+    state.chat = Hub(state)
+    Notifier.chat_hook = state.chat.notify_hook
+    state.chat.start()
     from waitress import serve as waitress_serve
     shown = "localhost" if _is_local(host) or host == "0.0.0.0" else host
     print(f"Jarvis dashboard: http://{shown}:{port}" + ("  (also reachable from your network)" if host == "0.0.0.0" else ""))

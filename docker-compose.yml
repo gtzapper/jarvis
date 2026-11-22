@@ -51,6 +51,19 @@ services:
     volumes:
       - ./docker/searxng:/etc/searxng
 
+  # Optional: talk to Jarvis from Signal. Start it with:  docker compose --profile signal up -d
+  # Setup > Signal keeps http://signal:8080. Jarvis needs a number of its own, linked like Signal Desktop (Setup > Signal > Test says how).
+  # Not published on a port: anyone who can reach it could send messages as that number.
+  signal:
+    image: bbernhard/signal-cli-rest-api:latest
+    container_name: jarvis-signal
+    profiles: ["signal"]
+    restart: unless-stopped
+    environment:
+      MODE: "normal"   # Jarvis polls /v1/receive
+    volumes:
+      - signal-data:/home/.local/share/signal-cli
+
   # Optional: reach Jarvis from the internet through a Cloudflare Tunnel (no ports opened on your router).
   # Better first: a VPN (WireGuard on pfSense, or Tailscale). If you do use this:
   #   1. Cloudflare Zero Trust > Networks > Tunnels > Create, pick Docker, copy the token into .env as CLOUDFLARE_TUNNEL_TOKEN.
@@ -79,3 +92,4 @@ networks:
 
 volumes:
   voice-models:
+  signal-data:

@@ -452,6 +452,12 @@ def outbox(after: int = 0, limit: int = 50, user: str | None = None) -> list[dic
         return [dict(r) for r in c.execute(f"SELECT * FROM outbox WHERE id > ? AND {w} ORDER BY id LIMIT ?", (after, *args, limit))]
 
 
+def user_outbox_after(after: int) -> list[dict]:
+    """Family members' own reminders since `after` (for their chat apps)."""
+    with db() as c:
+        return [dict(r) for r in c.execute("SELECT * FROM outbox WHERE id > ? AND user IS NOT NULL ORDER BY id", (after,))]
+
+
 def last_outbox_id() -> int:
     with db() as c:
         return c.execute("SELECT COALESCE(MAX(id), 0) FROM outbox").fetchone()[0]
