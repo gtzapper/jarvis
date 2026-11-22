@@ -411,6 +411,65 @@ Speech is handled on your own network by a **Speaches** server: Whisper turns sp
 
 When a spoken request needs your OK, the device says "That needs your OK" and the question appears in the dashboard chat and the Android app, labelled with the device's name. With ntfy set up, your phone also gets a push alert. Once you tap, the device speaks the result.
 
+## Users, family accounts and single sign-on
+Jarvis has accounts. There are two kinds:
+
+| | Admin | Family |
+|---|---|---|
+| Chat with Jarvis (typed or AI) | yes | yes, limited |
+| Shared lists (shopping, to-do) | yes | yes |
+| Reminders and notes | yes | **their own**, private to them |
+| Weather, what to watch, recently added | yes | yes |
+| Ask for a movie or show | yes | yes (an admin approves) |
+| Lab, downloads, email, calendar and bills, locations, documents | yes | no |
+| Approvals, permission mode, Setup, users | yes | no |
+
+- **Upgrading:** your existing dashboard password becomes the **admin** account (username `admin`). Logging in with just the password still works, so the Android app keeps working.
+- **Inviting people (the easy way):** Setup → **Users** → *Invite by email*. Enter their address and choose Family or Admin.
+  - They get an email with a button that opens a welcome page. There they continue with your single sign-on, or pick a username and password.
+  - The link works once and expires after 7 days (Setup → Accounts & invites). It's stored only as a hash.
+  - **Resend** sends a fresh link; **Cancel** kills it.
+  - An invitation lets someone in even if they aren't in your provider's groups. That's handy for Google, or for relatives outside your Authentik.
+- **Emailing needs Outgoing email (SMTP)** in Setup: your mail server, port, security, login and From address. **Test** sends you a test email.
+  - Gmail: `smtp.gmail.com`, 587, STARTTLS, with an app password.
+  - Your own relay (Postfix, Mailcow, Stalwart, Mailgun, SES…) works too.
+  - Without SMTP, Jarvis shows you the invitation link to pass on yourself.
+- **Or create accounts yourself:** Users → *Or create an account yourself*.
+- **Managing accounts:** make someone admin or family, reset their password, or switch the account off or delete it. Jarvis won't let you remove the last admin.
+- **Everyone can change their own password** from the account button (bottom of the menu).
+- **Enforced on the server**, not just hidden in the page:
+  - Family accounts get a fixed list of allowed URLs, and a chat and AI with only the family tools.
+  - Their chats can't be read by other family members.
+  - Their reminders reach only their own app.
+
+**Sign-in page:** single sign-on comes first, with one big button per provider. Password sign-in folds away underneath. Turn passwords off for everyone but admins in Setup → Accounts & invites; admins always keep a password, so a broken provider can't lock you out.
+
+**Single sign-on (OpenID Connect):** Setup → **Single sign-on** → add one or more providers. Choose the provider and Jarvis shows its own setup steps, the issuer format and the redirect URI to paste:
+
+| Provider | Who gets in |
+|---|---|
+| Authentik, Keycloak, Authelia, Pocket ID, Kanidm, Okta | groups (default `jarvis-admins` / `jarvis-family`) |
+| Microsoft Entra | groups (paste the group's Object ID) |
+| Google, Zitadel | *Admin emails* / *Family emails* (a whole domain like `@example.com` works) |
+| Any other OpenID Connect provider | groups or emails |
+
+Authentik in short:
+1. Applications → *Create with provider* → **OAuth2/OpenID Provider**, client type **Confidential**, with the redirect URI Jarvis shows.
+2. Copy the issuer, client ID and secret into Jarvis, then **Test**.
+3. Create the groups **jarvis-admins** and **jarvis-family** and add people.
+
+How it behaves:
+- People in a group get an account on their first sign-in, and their group sets their role every time.
+- Removing someone from the groups locks them out, unless they came in by invitation.
+- An existing account with the same verified email is linked rather than duplicated.
+
+How it's checked:
+- The code flow uses PKCE, a state and a nonce.
+- The ID token's signature is verified (RS256/ES256 against the provider's keys, or HS256 with the client secret).
+- The issuer, audience, expiry and nonce are also checked.
+
+The **Android app** (2.3) signs in the same way: **Sign in** opens your Jarvis sign-in page (every provider's button) inside the app, and the app keeps only Jarvis's session. A username and password field is there too. Family accounts get a smaller app: Chat, Planner (Soon, Lists, Media and Notes) and Settings.
+
 ## Permission modes (Ask, Auto, Read-only)
 Like Claude Code, Jarvis has modes for how much it may do without asking. Switch them with the pill above the chat box, or type `ask mode`, `auto mode` or `read-only mode` (`mode` shows the current one).
 

@@ -95,6 +95,21 @@ def _t_location(cfg, e):
     return test(cfg)
 
 
+def _t_sso(cfg, e):
+    from .oidc import discover
+    d = discover(e["issuer"], e.get("verify_tls", True))
+    base = ((cfg.get("accounts") or {}).get("public_url") or "https://<your jarvis address>").rstrip("/")
+    if d["issuer"].rstrip("/") != e["issuer"].rstrip("/"):
+        raise ValueError(f"The provider calls itself {d['issuer']}, not {e['issuer']}. Use exactly that as the issuer")
+    return f"Found {d['issuer']}. In {e.get('name') or 'your provider'}, set the redirect URI to {base}/auth/sso/callback"
+
+
+def _t_smtp(cfg, e):
+    from .invites import send_mail
+    send_mail(cfg, e["from_address"], "Jarvis test email", "This is a test from Jarvis. Outgoing email works, so invitations will too.")
+    return f"Sent a test email to {e['from_address']}. Check that inbox (and spam)"
+
+
 def _t_documents(cfg, e):
     from .docs import index, local_ai
     url, model, emb, vision = local_ai(cfg)
@@ -370,8 +385,45 @@ SERVICES: list[Service] = [
             help="Jarvis updates itself from its GitHub repo (the button at the top of this page). For a private repo, create a "
                  "fine-grained GitHub token with read-only 'Contents' access to that one repo and paste it here.",
             fields=[Field("token_env", "GitHub token (private repos only)", "secret", env="JARVIS_GIT_TOKEN")]),
+    Service("accounts", "Accounts & invites", "Jarvis", ("accounts",),
+            help="How people sign in. Add and invite people in Setup > Users (the card below the service tiles).",
+            fields=[Field("public_url", "Jarvis address people use", help="e.g. https://jarvis.example.com. Used in invitation emails and "
+                          "for single sign-on. Blank = whatever address the browser used"),
+                    Field("password_login", "Allow passwords", "bool", default=True,
+                          help="Off = everyone but admins must use single sign-on. Admins can always use a password, so you can't lock yourself out"),
+                    Field("invite_days", "Invitation links expire after (days)", "int", default=7)]),
+    Service("smtp", "Outgoing email (SMTP)", "Jarvis", ("smtp",), test=_t_smtp,
+            help="Lets Jarvis send email from itself: invitations to create an account. Gmail: smtp.gmail.com, 587, STARTTLS, your "
+                 "address and an app password. Outlook.com: smtp-mail.outlook.com, 587. Proton: your Bridge or SMTP token. "
+                 "Or your own relay (Postfix, Mailcow, Stalwart, Mailgun, SendGrid, Amazon SES...). Test sends an email to the From address.",
+            fields=[Field("host", "Server", help="e.g. smtp.gmail.com"),
+                    Field("port", "Port", "int", default=587, help="587 STARTTLS, 465 SSL, 25 plain"),
+                    Field("security", "Security", "choice", default="starttls", options=["starttls", "ssl", "none"]),
+                    Field("username", "Username", help="Usually your email address. Blank = no login (a local relay)"),
+                    Field("password_env", "Password", "secret", env="SMTP_PASSWORD", help="An app password for Gmail/iCloud/Yahoo"),
+                    Field("from_address", "From address", help="e.g. jarvis@example.com (must be allowed by the server)"),
+                    Field("from_name", "From name", default="Jarvis"),
+                    Field("verify_tls", "Check certificate", "bool", default=True)]),
+    Service("sso", "Single sign-on", "Jarvis", ("sso",), multi=True, test=_t_sso,
+            help="Sign in with your identity provider (OpenID Connect). Add one or several: each gets its own button on the login page. "
+                 "Pick the provider for its setup steps; who gets in is decided by groups (or, for Google and Zitadel, by email).",
+            fields=[Field("provider", "Provider", "choice", default="authentik",
+                          options=["authentik", "keycloak", "authelia", "zitadel", "pocketid", "kanidm", "google", "microsoft", "okta", "other"]),
+                    Field("name", "Button label", required=True, default="Authentik", help="Shown as 'Sign in with ...'"),
+                    Field("issuer", "Issuer URL", required=True),
+                    Field("client_id", "Client ID", required=True),
+                    Field("client_secret_env", "Client secret", "secret", env="OIDC_CLIENT_SECRET"),
+                    Field("admin_group", "Admin group", default="jarvis-admins", help="Members get full access (Microsoft: the group's Object ID)"),
+                    Field("family_group", "Family group", default="jarvis-family", help="Members get a family account"),
+                    Field("admin_emails", "Admin emails", "list", help="For providers without groups (Google): these addresses get admin"),
+                    Field("family_emails", "Family emails", "list", help="These addresses (or a whole domain like @example.com) get family accounts"),
+                    Field("auto_create", "Let anyone from this provider in as family", "bool", default=False,
+                          help="Only when no groups or emails are set. Invited people always get in"),
+                    Field("enabled", "Show on the login page", "bool", default=True),
+                    Field("verify_tls", "Check certificate", "bool", default=True)]),
     Service("web", "Web dashboard", "Jarvis", ("web",),
-            help="Only needed to open the dashboard from other devices. Without a password it only listens on this PC.",
+            help="Only needed to open the dashboard from other devices. Without a password it only listens on this PC. "
+                 "The first password becomes the 'admin' account; after that, manage passwords in Setup > Users.",
             fields=[Field("password_env", "Dashboard password", "secret", env="JARVIS_WEB_PASSWORD"),
                     Field("host", "Listen on", default="127.0.0.1", help="0.0.0.0 = whole network (password required)"),
                     Field("port", "Port", "int", default=8765)]),

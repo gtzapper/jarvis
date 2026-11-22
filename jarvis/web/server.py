@@ -48,6 +48,7 @@ class Job:
         self.created = time.time()
         self.origin: str | None = None      # a listening device's name, for requests made by voice
         self.device_id: str | None = None
+        self.user: dict | None = None       # who asked (None = the owner, e.g. a listening device)
 
 
 class State:
@@ -68,7 +69,19 @@ class State:
             self.assistant = Assistant(self.cfg, self.stack)
             self.assistant.report_source = self.build_report
             self.assistant.reports_source = lambda: list(self.monitor.reports)
+            self.family_assistants: dict[str, Assistant] = {}  # one per family member (their own chat history)
         self.wake.set()
+
+    def assistant_for(self, user: dict | None) -> Assistant:
+        """Admins share the owner's assistant; each family member gets a limited one of their own."""
+        if not user or user.get("role") == "admin":
+            return self.assistant
+        with self.lock:
+            a = self.family_assistants.get(user["id"])
+            if a is None:
+                a = Assistant(self.cfg, self.stack, user=user)
+                self.family_assistants[user["id"]] = a
+            return a
 
     def monitor_loop(self):
         while True:
@@ -238,7 +251,7 @@ class State:
             return job.answer
 
         with self.job_lock:
-            a = self.assistant
+            a = self.assistant_for(job.user)
             a.confirm = lambda q: bool(ask({"type": "confirm", "question": q}))
 
             def confirm_code(q):
@@ -274,11 +287,45 @@ def create_app(state: State, password: str | None) -> Flask:
         SECRET_FILE.write_text(pysecrets.token_hex(32))
     app.secret_key = SECRET_FILE.read_text().strip()
     app.config.update(SESSION_COOKIE_SAMESITE="Strict", SESSION_COOKIE_HTTPONLY=True)
+    from .. import invites, oidc, users
+    users.ensure_owner(password)  # first start with accounts: the dashboard password becomes the 'admin' account
+
+    def auth_required() -> bool:
+        return bool(password) or users.any_users() or bool(oidc.providers(state.cfg))
+
+    OWNER = {"id": None, "username": "owner", "name": "Owner", "role": "admin"}  # when no accounts or password exist (local only)
+
+    def current_user() -> dict | None:
+        uid = session.get("uid")
+        if uid:
+            u = users.get(uid)
+            return u if u and not u.get("disabled") else None
+        if session.get("ok"):  # signed in before accounts existed: that was the owner
+            return next((u for u in users.all_users() if u["role"] == "admin" and not u.get("disabled")), OWNER)
+        return None if auth_required() else OWNER
+
+    # What a family member may use. Everything else (Setup, the lab, email, approvals...) is admin only.
+    FAMILY = [("GET", r"/api/(me|mode|ai|weather|outbox|pending|life|planner|media/watch|media/requests)"),
+              ("POST", r"/api/me/password|/logout|/api/chat(/reset)?|/api/chat/[\w-]+/answer|/api/media/request"),
+              ("GET", r"/api/chat/[\w-]+"),
+              ("POST", r"/api/life/item(/\d+/(check|uncheck|delete))?|/api/life/clear|/api/planner/(note|reminder)(/\d+/delete)?")]
+
+    def family_may(method: str, path: str) -> bool:
+        if not path.startswith("/api/") and path != "/logout":
+            return True  # the page itself, styles, icons
+        return any(method == m and re.fullmatch(rx, path) for m, rx in FAMILY)
+
+    def who() -> str | None:
+        """Whose reminders/notes: None for admins (the household), the user id for a family member."""
+        u = getattr(g, "user", None)
+        return u["id"] if u and u.get("role") == "family" else None
 
     @app.before_request
     def guard():
-        if request.path in ("/login", "/favicon.ico") or request.path in APP_FILES:  # the app icon and manifest hold no data
-            return None
+        if request.path in ("/login", "/favicon.ico", "/auth/info", "/auth/sso", "/auth/sso/callback") or request.path in APP_FILES:
+            return None  # the app icon and manifest hold no data
+        if request.path.startswith(("/invite/", "/api/invite/")):
+            return None  # an invitation link is its own permission (checked in the handlers)
         if request.path.startswith("/calendar/"):
             return None  # the private calendar feed checks its own secret link
         if request.path == "/api/location/owntracks":
@@ -306,10 +353,13 @@ def create_app(state: State, password: str | None) -> Flask:
             if not g.device:
                 return jsonify(error="unknown or revoked device code"), 401
             return None
-        if password and not session.get("ok"):
+        g.user = current_user()
+        if not g.user:
             return (jsonify(error="login required"), 401) if request.path.startswith("/api/") else redirect("/login")
-        if request.method != "GET" and request.headers.get("X-Jarvis") != "1":
+        if request.method != "GET" and request.headers.get("X-Jarvis") != "1" and request.path != "/logout":
             abort(403)  # cross-site forms can't set this header
+        if g.user["role"] != "admin" and not family_may(request.method, request.path):
+            return jsonify(error="Your account can't use that. Ask the owner."), 403
         return None
 
     @app.after_request
@@ -319,21 +369,278 @@ def create_app(state: State, password: str | None) -> Flask:
         resp.headers["Referrer-Policy"] = "no-referrer"
         return resp
 
+    def _sign_in(u: dict):
+        session.clear()
+        session["uid"] = u["id"]
+        session.permanent = True
+
+    def password_login_allowed() -> bool:
+        acc = state.cfg.get("accounts") or {}
+        old = state.cfg.get("sso") if isinstance(state.cfg.get("sso"), dict) else {}
+        return acc.get("password_login", (old or {}).get("password_login", True)) is not False
+
     @app.route("/login", methods=["GET", "POST"])
     def login():
-        if not password:
+        if not auth_required():
             return redirect("/")
         if request.method == "POST":
-            if hmac.compare_digest(request.form.get("password", "").encode(), password.encode()):
-                session["ok"] = True
-                session.permanent = True
+            if not password_login_allowed() and oidc.providers(state.cfg):
+                u0 = users.by_username(request.form.get("username", "")) if request.form.get("username") else None
+                if u0 and u0["role"] != "admin":  # family must use single sign-on; admins keep a way in
+                    time.sleep(1.5)
+                    return redirect("/login?error=sso")
+            u = users.authenticate(request.form.get("username", "").strip(), request.form.get("password", ""))
+            if u and not password_login_allowed() and oidc.providers(state.cfg) and u["role"] != "admin":
+                u = None
+            if u:
+                _sign_in(u)
+                audit(f"login: {u['username']} (password)")
                 return redirect("/")
             time.sleep(1.5)  # slow down guessing
+            return redirect("/login?error=1")
         return send_from_directory(STATIC, "login.html")
+
+    def _sso_buttons():
+        return [{"key": p["_key"], "label": p["_label"], "provider": p.get("provider") or "other"} for p in oidc.providers(state.cfg)]
+
+    @app.get("/auth/info")
+    def auth_info():
+        b = _sso_buttons()
+        return jsonify(providers=b, sso=bool(b), sso_name=b[0]["label"] if b else "single sign-on", password_login=password_login_allowed())
+
+    def _public_base() -> str:
+        acc = (state.cfg.get("accounts") or {}).get("public_url")
+        old = (state.cfg.get("sso") or {}).get("public_url") if isinstance(state.cfg.get("sso"), dict) else None
+        return (acc or old or request.host_url).rstrip("/")
+
+    def _redirect_uri() -> str:
+        return _public_base() + "/auth/sso/callback"
+
+    @app.get("/auth/sso")
+    def sso_start():
+        invite = request.args.get("invite") or None
+        if invite and not invites.find(invite):
+            return _sso_page("That invitation link has expired or was already used. Ask for a new one.", ok=False), 400
+        try:
+            return redirect(oidc.start(state.cfg, _redirect_uri(), key=request.args.get("p") or None, invite=invite))
+        except oidc.SSOError as e:
+            return _sso_page(str(e), ok=False), 400
+
+    def _sso_page(msg: str, ok: bool):
+        # The provider sends the browser here from another site, so the (SameSite=Strict) cookie only "takes" on a
+        # same-site navigation: this page hops to the dashboard itself.
+        import html as _h
+        body = (f'<p>{_h.escape(msg)}</p><script>location.replace("/")</script>' if ok else
+                f'<p>{_h.escape(msg)}</p><p><a href="/login">Back to the login page</a></p>')
+        return (f'<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Jarvis</title>'
+                f'<link rel="stylesheet" href="/themes.css"><body style="font:15px system-ui;padding:24px;background:var(--bg);color:var(--text)">{body}</body>')
+
+    def _free_username(wanted: str) -> str:
+        base = re.sub(r"[^a-z0-9._-]", "", (wanted or "user").lower())[:28] or "user"
+        base = base if len(base) > 1 else base + "user"
+        name, n = base, 1
+        while users.by_username(name):
+            n += 1
+            name = f"{base}{n}"
+        return name
+
+    @app.get("/auth/sso/callback")
+    def sso_callback():
+        if request.args.get("error"):
+            return _sso_page(f"Sign-in was cancelled or refused ({request.args.get('error_description') or request.args['error']}).", ok=False), 400
+        try:
+            claims, prov, pend = oidc.finish(state.cfg, request.args.get("state", ""), request.args.get("code", ""))
+        except oidc.SSOError as e:
+            return _sso_page(str(e), ok=False), 400
+        sub, email = f"{prov['_key']}|{claims.get('sub')}", (claims.get("email") or "").lower()
+        verified = claims.get("email_verified", True) is not False
+        role = oidc.role_for(prov, claims)
+        inv = invites.find(pend.get("invite")) if pend.get("invite") else None
+        if pend.get("invite") and not inv:
+            return _sso_page("That invitation link has expired or was already used. Ask for a new one.", ok=False), 400
+        # who is this? the same provider account, or an account with this verified email
+        u = next((x for x in users.all_users() if x.get("oidc_sub") in (sub, str(claims.get("sub")))), None)
+        if not u and email and verified:
+            u = next((x for x in users.all_users() if (x.get("email") or "").lower() == email), None)
+        if u and u.get("oidc_sub") != sub:
+            u = users.update(u["id"], oidc_sub=sub)  # link it
+        if not u:
+            if inv:
+                role = inv["role"]  # the invitation decides, whatever the groups say
+            if not role:
+                audit(f"SSO login refused for {email or sub}: not in an allowed group and not invited")
+                return _sso_page("Your account isn't allowed into Jarvis. Ask the owner for an invitation (or to be put in the Jarvis group).", ok=False), 403
+            name = _free_username(claims.get("preferred_username") or email.split("@")[0])
+            u = users.create(name, claims.get("name") or (inv or {}).get("name") or name, role, None, email or (inv or {}).get("email", ""), sub)
+            if inv:
+                users.update(u["id"], invited=True)
+            audit(f"SSO: created {role} account {name} for {email or sub}" + (f" (invited by {inv['invited_by']})" if inv else ""))
+        elif oidc.decides_roles(prov) and role and role != u["role"]:
+            try:
+                u = users.update(u["id"], role=role)  # the provider's groups are the source of truth
+            except ValueError:
+                pass
+        elif oidc.decides_roles(prov) and not role and u["role"] != "admin" and not u.get("invited") and not inv:
+            audit(f"SSO login refused for {u['username']}: no longer in an allowed group")
+            return _sso_page("Your account is no longer allowed into Jarvis.", ok=False), 403
+        if inv:
+            invites.use(pend["invite"], u["id"])
+        if u.get("disabled"):
+            return _sso_page("This account is switched off. Ask the owner.", ok=False), 403
+        users.update(u["id"], last_login=time.strftime("%Y-%m-%dT%H:%M"))
+        _sign_in(u)
+        audit(f"login: {u['username']} (single sign-on, {prov['_label']})")
+        return _sso_page("Signed in. Opening Jarvis...", ok=True)
+
+    # ------------------------------------------------------------ invitations
+
+    @app.get("/invite/<token>")
+    def invite_page(token):
+        return send_from_directory(STATIC, "invite.html")
+
+    @app.get("/api/invite/<token>")
+    def invite_info(token):
+        inv = invites.find(token)
+        if not inv:
+            return jsonify(ok=False, error="This invitation has expired or was already used. Ask for a new one."), 404
+        return jsonify(ok=True, email=inv["email"], name=inv.get("name") or "", role=inv["role"], invited_by=inv.get("invited_by"),
+                       providers=_sso_buttons(), password=password_login_allowed() or not oidc.providers(state.cfg) or inv["role"] == "admin",
+                       suggested=_free_username(inv["email"].split("@")[0]))
+
+    @app.post("/api/invite/<token>")
+    def invite_accept(token):
+        if request.headers.get("X-Jarvis") != "1":
+            abort(403)
+        inv = invites.find(token)
+        if not inv:
+            return jsonify(ok=False, error="This invitation has expired or was already used. Ask for a new one.")
+        if not (password_login_allowed() or not oidc.providers(state.cfg) or inv["role"] == "admin"):
+            return jsonify(ok=False, error="Please use the single sign-on button.")
+        b = request.json or {}
+        if len(b.get("password") or "") < 8:
+            return jsonify(ok=False, error="Pick a password of at least 8 characters.")
+        try:
+            u = users.create(b.get("username", ""), b.get("name") or inv.get("name") or "", inv["role"], b["password"], inv["email"])
+        except ValueError as e:
+            return jsonify(ok=False, error=str(e))
+        if not invites.use(token, u["id"]):  # someone was faster with the same link
+            users.delete(u["id"])
+            return jsonify(ok=False, error="This invitation was just used. Ask for a new one.")
+        users.update(u["id"], invited=True, last_login=time.strftime("%Y-%m-%dT%H:%M"))
+        _sign_in(u)
+        audit(f"invitation accepted: {u['username']} ({u['role']}, invited by {inv.get('invited_by')})")
+        return jsonify(ok=True)
+
+    @app.get("/api/invites")
+    def invites_list():
+        return jsonify(invites=[invites.public(i) for i in reversed(invites.all_invites())][:50],
+                       smtp=bool(invites.smtp_settings(state.cfg)))
+
+    def _send_invite(email: str, role: str, name: str):
+        days = int((state.cfg.get("accounts") or {}).get("invite_days") or 7)
+        inviter = g.user.get("name") or g.user.get("username") or "The owner"
+        inv, token = invites.create(email, role, name, inviter, days)
+        link = f"{_public_base()}/invite/{token}"
+        expires = invites.public(inv)["expires"]
+        try:
+            invites.send_mail(state.cfg, inv["email"], *invites.invite_email(link, inviter, role, inv.get("name"), expires))
+            invites.mark(inv["id"], sent=time.strftime("%Y-%m-%d %H:%M"), error=None)
+            audit(f"invitation sent to {inv['email']} ({role})")
+            return jsonify(ok=True, sent=True, invite=invites.public({**inv, "sent": True}))
+        except invites.InviteError as e:
+            invites.mark(inv["id"], error=str(e))
+            audit(f"invitation for {inv['email']} not emailed: {e}")
+            # the admin can still pass the link on themselves (shown once, never stored)
+            return jsonify(ok=True, sent=False, error=str(e), link=link, invite=invites.public({**inv, "error": str(e)}))
+
+    @app.post("/api/invites")
+    def invites_create():
+        b = request.json or {}
+        try:
+            return _send_invite(b.get("email", ""), b.get("role", "family"), b.get("name", ""))
+        except invites.InviteError as e:
+            return jsonify(ok=False, error=str(e))
+
+    @app.post("/api/invites/<inv_id>/<action>")
+    def invites_action(inv_id, action):
+        inv = next((i for i in invites.all_invites() if i["id"] == inv_id), None) or abort(404)
+        if action == "revoke":
+            invites.mark(inv_id, revoked=True)
+            audit(f"invitation for {inv['email']} revoked")
+            return jsonify(ok=True)
+        if action == "resend":  # a fresh link (the old one stops working)
+            return _send_invite(inv["email"], inv["role"], inv.get("name", ""))
+        abort(404)
 
     @app.post("/logout")
     def logout():
         session.clear()
+        return jsonify(ok=True)
+
+    @app.get("/api/me")
+    def me():
+        u = g.user
+        return jsonify(user=users.public(u) if u.get("id") else {**OWNER, "has_password": False}, auth=auth_required(),
+                       roles=users.ROLES)
+
+    @app.post("/api/me/password")
+    def me_password():
+        b = request.json or {}
+        u = g.user
+        if not u.get("id"):
+            return jsonify(ok=False, error="Create an admin account first (Setup > Users).")
+        if u.get("pw") and not users.check_password(b.get("current", ""), u["pw"]):
+            time.sleep(1)
+            return jsonify(ok=False, error="Your current password is wrong.")
+        try:
+            users.update(u["id"], password=b.get("new", ""))
+        except ValueError as e:
+            return jsonify(ok=False, error=str(e))
+        audit(f"password changed: {u['username']}")
+        return jsonify(ok=True)
+
+    @app.get("/api/users")
+    def users_list():
+        return jsonify(users=[users.public(u) for u in users.all_users()], roles=users.ROLES, sso=bool(oidc.providers(state.cfg)),
+                       smtp=bool(invites.smtp_settings(state.cfg)))
+
+    @app.post("/api/users")
+    def users_create():
+        b = request.json or {}
+        try:
+            u = users.create(b.get("username", ""), b.get("name", ""), b.get("role", "family"), b.get("password") or None, b.get("email", ""))
+        except ValueError as e:
+            return jsonify(ok=False, error=str(e))
+        audit(f"user created: {u['username']} ({u['role']})")
+        return jsonify(ok=True, user=users.public(u))
+
+    @app.post("/api/users/<uid>")
+    def users_change(uid):
+        b = request.json or {}
+        allowed = {k: b[k] for k in ("name", "role", "email", "disabled", "password", "username") if k in b}
+        if "chat" in b and isinstance(b["chat"], dict):
+            allowed["chat"] = {k: str(v).strip() for k, v in b["chat"].items() if k in ("telegram", "discord", "matrix") and str(v).strip()}
+        if b.get("unlink_sso"):
+            allowed["oidc_sub"] = None
+        try:
+            u = users.update(uid, **allowed)
+        except ValueError as e:
+            return jsonify(ok=False, error=str(e))
+        state.family_assistants.pop(uid, None)  # pick up a role or name change
+        audit(f"user changed: {u['username']} ({', '.join(k if k != 'password' else 'password reset' for k in allowed)})")
+        return jsonify(ok=True, user=users.public(u))
+
+    @app.post("/api/users/<uid>/delete")
+    def users_delete(uid):
+        if g.user.get("id") == uid:
+            return jsonify(ok=False, error="You can't delete your own account while signed in to it.")
+        try:
+            u = users.get(uid)
+            users.delete(uid)
+        except ValueError as e:
+            return jsonify(ok=False, error=str(e))
+        state.family_assistants.pop(uid, None)
+        audit(f"user deleted: {u['username'] if u else uid}")
         return jsonify(ok=True)
 
     @app.get("/")
@@ -411,18 +718,26 @@ def create_app(state: State, password: str | None) -> Flask:
         if not text:
             abort(400)
         job = Job(text)
+        job.user = g.user if g.user.get("role") == "family" else None
+        job.origin = None if not g.user.get("id") or g.user["role"] == "admin" else g.user.get("name")
         state.jobs[job.id] = job
         state.start_job(job)
         return job_view(job)
 
+    def _my_job(job_id) -> Job:
+        job = state.jobs.get(job_id) or abort(404)
+        mine = (job.user or {}).get("id")
+        if g.user["role"] != "admin" and mine != g.user.get("id"):
+            abort(404)  # family members only see their own conversations
+        return job
+
     @app.get("/api/chat/<job_id>")
     def chat_poll(job_id):
-        job = state.jobs.get(job_id) or abort(404)
-        return job_view(job)
+        return job_view(_my_job(job_id))
 
     @app.post("/api/chat/<job_id>/answer")
     def chat_answer(job_id):
-        job = state.jobs.get(job_id) or abort(404)
+        job = _my_job(job_id)
         if job.status != "input":
             abort(409)
         answer = (request.json or {}).get("answer")
@@ -440,8 +755,9 @@ def create_app(state: State, password: str | None) -> Flask:
     @app.post("/api/chat/reset")
     def chat_reset():
         with state.job_lock:
-            if state.assistant.brain:
-                state.assistant.brain.reset()
+            a = state.assistant_for(g.user if g.user.get("role") == "family" else None)
+            if a.brain:
+                a.brain.reset()
         return jsonify(ok=True)
 
     @app.route("/api/mode", methods=["GET", "POST"])
@@ -449,6 +765,8 @@ def create_app(state: State, password: str | None) -> Flask:
         from .. import modes
         from ..audit import audit
         if request.method == "POST":
+            if g.user["role"] != "admin":
+                return jsonify(error="Only an admin can change the mode."), 403
             try:
                 new = modes.set_mode((request.json or {}).get("mode", ""))
             except ValueError as e:
@@ -467,7 +785,9 @@ def create_app(state: State, password: str | None) -> Flask:
     @app.get("/api/setup")
     def setup_get():
         pub_path = Path("~/.ssh/jarvis_ed25519.pub").expanduser()
-        return jsonify(services=S.public_view(), ssh_public_key=pub_path.read_text().strip() if pub_path.exists() else None)
+        base = ((state.cfg.get("accounts") or {}).get("public_url") or request.host_url).rstrip("/")
+        return jsonify(services=S.public_view(), ssh_public_key=pub_path.read_text().strip() if pub_path.exists() else None,
+                       sso_presets=oidc.PRESETS, sso_redirect=base + "/auth/sso/callback")
 
     @app.post("/api/setup/<sid>")
     def setup_save(sid):
@@ -619,6 +939,10 @@ def create_app(state: State, password: str | None) -> Flask:
     def planner():
         from .. import organizer as O
         days = max(1, min(int(request.args.get("days", 31)), 400))
+        if who():
+            return jsonify(upcoming=[{**i, "text": O.describe(i)} for i in O.upcoming(days, user=who())], reminders=O.reminders(user=who()),
+                           events=[], notes=O.notes(limit=200, user=who()),
+                           feed=None, feed_enabled=False, repeats=O.REPEATS, family=True)
         return jsonify(upcoming=[{**i, "text": O.describe(i)} for i in O.upcoming(days)], reminders=O.reminders(),
                        events=O.events(), notes=O.notes(limit=200), feed=f"/calendar/{O.feed_token()}.ics",
                        feed_enabled=O.feed_enabled(), repeats=O.REPEATS)
@@ -656,14 +980,14 @@ def create_app(state: State, password: str | None) -> Flask:
     def planner_note():
         from .. import organizer as O
         text = (request.json or {}).get("text", "")
-        return _planner_change(lambda: O.add_note(text), f"note added: {text[:60]}")
+        return _planner_change(lambda: O.add_note(text, user=who()), f"note added: {text[:60]}")
 
     @app.post("/api/planner/reminder")
     def planner_reminder():
         from datetime import datetime as dt
         from .. import organizer as O
         b = request.json or {}
-        return _planner_change(lambda: O.add_reminder(b.get("text", ""), dt.fromisoformat(b["due"]), b.get("repeat", "")),
+        return _planner_change(lambda: O.add_reminder(b.get("text", ""), dt.fromisoformat(b["due"]), b.get("repeat", ""), user=who()),
                                f"reminder added: {b.get('text', '')[:60]} at {b.get('due')}")
 
     @app.post("/api/planner/event")
@@ -680,7 +1004,8 @@ def create_app(state: State, password: str | None) -> Flask:
     @app.post("/api/planner/<kind>/<int:item_id>/delete")
     def planner_delete(kind, item_id):
         from .. import organizer as O
-        fn = {"note": O.delete_note, "reminder": O.cancel_reminder, "event": O.delete_event}.get(kind) or abort(404)
+        fn = {"note": lambda i: O.delete_note(i, user=who()), "reminder": lambda i: O.cancel_reminder(i, user=who()),
+              "event": O.delete_event}.get(kind) or abort(404)
         return _planner_change(lambda: fn(item_id), f"{kind} {item_id} deleted")
 
     @app.post("/api/planner/event/<int:item_id>/paid")
@@ -749,7 +1074,8 @@ def create_app(state: State, password: str | None) -> Flask:
         from ..media import insights
         d = request.get_json(silent=True) or {}
         try:
-            rid, text = insights.add_request(state.stack, str(d.get("who") or "you")[:40], d.get("kind", "movie"), str(d.get("title", ""))[:120])
+            name = g.user.get("name") if who() else (str(d.get("who") or "you")[:40])
+            rid, text = insights.add_request(state.stack, name, d.get("kind", "movie"), str(d.get("title", ""))[:120], uid=who())
             return jsonify(ok=True, id=rid, result=text)
         except Exception as e:
             return _media_err(e)
@@ -865,6 +1191,8 @@ def create_app(state: State, password: str | None) -> Flask:
     @app.get("/api/life")
     def life_view():
         from .. import life
+        if who():  # family: the shared lists, not the owner's habits and memories
+            return jsonify(items=life.items(include_done=True), lists=life.lists(), habits=[], memories=[])
         return jsonify(items=life.items(include_done=True), lists=life.lists(), habits=life.habits(), memories=life.memories())
 
     @app.post("/api/life/item")
@@ -1134,7 +1462,7 @@ def create_app(state: State, password: str | None) -> Flask:
         p = state.planner_cfg()
         if after is None:  # first contact: start from now, no backlog
             return jsonify(items=[], last=O.last_outbox_id(), enabled=p["app"])
-        return jsonify(items=O.outbox(after) if p["app"] else [], last=O.last_outbox_id(), enabled=p["app"])
+        return jsonify(items=O.outbox(after, user=who()) if p["app"] else [], last=O.last_outbox_id(), enabled=p["app"])
 
     @app.get("/api/voice/device/announcements")
     def device_announcements():
@@ -1166,9 +1494,10 @@ def create_app(state: State, password: str | None) -> Flask:
     @app.get("/api/pending")
     def pending():
         """Questions waiting for an answer, e.g. a reboot asked for by voice: shown in the dashboard and the app."""
+        mine = lambda j: g.user["role"] == "admin" or (j.user or {}).get("id") == g.user.get("id")
         return jsonify(pending=[{"id": j.id, "text": j.text, "origin": getattr(j, "origin", None), "prompt": j.prompt,
                                  "progress": j.progress, "status": j.status}
-                                for j in list(state.jobs.values()) if j.status == "input"])
+                                for j in list(state.jobs.values()) if j.status == "input" and mine(j)])
 
     @app.post("/api/media-discover")
     def media_discover():
@@ -1296,7 +1625,9 @@ def serve(host: str | None = None, port: int | None = None, monitor: bool = True
         print(f"First start: your dashboard password is  {password}")
         print("It's saved in /config/.env as JARVIS_WEB_PASSWORD. Change it any time in Setup > Web dashboard.")
         print("=" * 70, flush=True)
-    if not _is_local(host) and not password:
+    from .. import oidc as _oidc
+    from .. import users as _users
+    if not _is_local(host) and not password and not _users.any_users() and not _oidc.providers(state.cfg):
         raise SystemExit("Refusing to open the dashboard to the network without a password. "
                          "Set JARVIS_WEB_PASSWORD in .env (or in Setup > Web dashboard), or use --host 127.0.0.1.")
     if monitor:

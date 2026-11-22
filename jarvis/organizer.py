@@ -16,15 +16,22 @@ REPEATS = ["", "daily", "weekdays", "weekly", "monthly", "yearly"]
 _lock = threading.Lock()
 
 SCHEMA = """
-CREATE TABLE IF NOT EXISTS notes (id INTEGER PRIMARY KEY, text TEXT NOT NULL, created TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS notes (id INTEGER PRIMARY KEY, text TEXT NOT NULL, created TEXT NOT NULL, user TEXT);
 CREATE TABLE IF NOT EXISTS reminders (id INTEGER PRIMARY KEY, text TEXT NOT NULL, due TEXT NOT NULL, repeat TEXT DEFAULT '',
-    done INTEGER DEFAULT 0, created TEXT NOT NULL);
+    done INTEGER DEFAULT 0, created TEXT NOT NULL, user TEXT);
 CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY, title TEXT NOT NULL, kind TEXT DEFAULT 'event', day TEXT NOT NULL,
     time TEXT DEFAULT '', amount REAL, repeat TEXT DEFAULT '', remind_days INTEGER DEFAULT 3, paid INTEGER DEFAULT 0,
     notes TEXT DEFAULT '', created TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS sent (key TEXT PRIMARY KEY, at TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS outbox (id INTEGER PRIMARY KEY, at TEXT NOT NULL, kind TEXT, title TEXT, text TEXT);
+CREATE TABLE IF NOT EXISTS outbox (id INTEGER PRIMARY KEY, at TEXT NOT NULL, kind TEXT, title TEXT, text TEXT, user TEXT);
 """
+# databases from before user accounts
+MIGRATIONS = ["ALTER TABLE notes ADD COLUMN user TEXT", "ALTER TABLE reminders ADD COLUMN user TEXT", "ALTER TABLE outbox ADD COLUMN user TEXT"]
+
+
+def _mine(user: str | None) -> tuple[str, tuple]:
+    """SQL for 'belongs to this person': the owner's things have no user; a family member's carry their id."""
+    return ("user IS NULL", ()) if not user else ("user = ?", (user,))
 
 
 @contextmanager
@@ -37,6 +44,11 @@ def db():
             key = str(DB.resolve())
             if key not in _ready:  # create the tables once per run (and again if the file was replaced)
                 con.executescript(SCHEMA)
+                for sql in MIGRATIONS:
+                    try:
+                        con.execute(sql)
+                    except sqlite3.OperationalError:
+                        pass  # already there
                 _ready.add(key)
             yield con
             con.commit()
@@ -220,49 +232,53 @@ def parse_when(text: str, base: datetime | None = None) -> tuple[datetime | None
 STOPWORDS = set("the a an is are was were what which who whom does do did my me i you it its in on at of for to and or "
                 "with about that this there have has had use uses used any some our your".split())
 
-def add_note(text: str) -> int:
+def add_note(text: str, user: str | None = None) -> int:
     text = text.strip()
     if not text:
         raise ValueError("The note is empty")
     with db() as c:
-        return c.execute("INSERT INTO notes (text, created) VALUES (?, ?)", (text, _iso(now()))).lastrowid
+        return c.execute("INSERT INTO notes (text, created, user) VALUES (?, ?, ?)", (text, _iso(now()), user)).lastrowid
 
 
-def notes(query: str = "", limit: int = 50) -> list[dict]:
+def notes(query: str = "", limit: int = 50, user: str | None = None) -> list[dict]:
+    w, args = _mine(user)
     with db() as c:
         if query:
-            words = [w for w in re.findall(r"\w+", query.lower()) if len(w) > 1 and w not in STOPWORDS]
-            rows = c.execute("SELECT * FROM notes ORDER BY id DESC").fetchall()
-            scored = [(sum(w in r["text"].lower() for w in words), r) for r in rows]
+            words = [x for x in re.findall(r"\w+", query.lower()) if len(x) > 1 and x not in STOPWORDS]
+            rows = c.execute(f"SELECT * FROM notes WHERE {w} ORDER BY id DESC", args).fetchall()
+            scored = [(sum(x in r["text"].lower() for x in words), r) for r in rows]
             return [dict(r) for s, r in sorted(scored, key=lambda x: -x[0]) if s > 0][:limit]
-        return [dict(r) for r in c.execute("SELECT * FROM notes ORDER BY id DESC LIMIT ?", (limit,))]
+        return [dict(r) for r in c.execute(f"SELECT * FROM notes WHERE {w} ORDER BY id DESC LIMIT ?", (*args, limit))]
 
 
-def delete_note(note_id: int) -> bool:
+def delete_note(note_id: int, user: str | None = None) -> bool:
+    w, args = _mine(user)
     with db() as c:
-        return c.execute("DELETE FROM notes WHERE id = ?", (note_id,)).rowcount > 0
+        return c.execute(f"DELETE FROM notes WHERE id = ? AND {w}", (note_id, *args)).rowcount > 0
 
 
 # ---------------------------------------------------------------- reminders
 
-def add_reminder(text: str, due: datetime, repeat: str = "") -> int:
+def add_reminder(text: str, due: datetime, repeat: str = "", user: str | None = None) -> int:
     if repeat not in REPEATS:
         raise ValueError(f"Repeat must be one of: {', '.join(r or 'none' for r in REPEATS)}")
     text = text.strip() or "Reminder"
     with db() as c:
-        return c.execute("INSERT INTO reminders (text, due, repeat, created) VALUES (?, ?, ?, ?)",
-                         (text, _iso(due), repeat, _iso(now()))).lastrowid
+        return c.execute("INSERT INTO reminders (text, due, repeat, created, user) VALUES (?, ?, ?, ?, ?)",
+                         (text, _iso(due), repeat, _iso(now()), user)).lastrowid
 
 
-def reminders(include_done: bool = False) -> list[dict]:
+def reminders(include_done: bool = False, user: str | None = None) -> list[dict]:
+    w, args = _mine(user)
     with db() as c:
-        q = "SELECT * FROM reminders" + ("" if include_done else " WHERE done = 0") + " ORDER BY due"
-        return [dict(r) for r in c.execute(q)]
+        q = f"SELECT * FROM reminders WHERE {w}" + ("" if include_done else " AND done = 0") + " ORDER BY due"
+        return [dict(r) for r in c.execute(q, args)]
 
 
-def cancel_reminder(rid: int) -> bool:
+def cancel_reminder(rid: int, user: str | None = None) -> bool:
+    w, args = _mine(user)
     with db() as c:
-        return c.execute("DELETE FROM reminders WHERE id = ?", (rid,)).rowcount > 0
+        return c.execute(f"DELETE FROM reminders WHERE id = ? AND {w}", (rid, *args)).rowcount > 0
 
 
 # ---------------------------------------------------------------- events and bills
@@ -314,12 +330,13 @@ def mark_paid(name_or_id) -> str:
         return f"Marked {e['title']} paid."
 
 
-def upcoming(days: int = 14, start: date | None = None) -> list[dict]:
-    """Every event, bill and reminder from start (today) for the next N days, repeats expanded, in date order."""
+def upcoming(days: int = 14, start: date | None = None, user: str | None = None) -> list[dict]:
+    """Every event, bill and reminder from start (today) for the next N days, repeats expanded, in date order.
+    For a family member (user): just their own reminders."""
     frm = start or now().date()
     to = frm + timedelta(days=days)
     out = []
-    for e in events():
+    for e in ([] if user else events()):
         if e["kind"] == "bill" and e["paid"]:
             continue
         for d in occurrences(date.fromisoformat(e["day"]), e["repeat"], frm if e["kind"] != "bill" else date.min, to):
@@ -330,7 +347,7 @@ def upcoming(days: int = 14, start: date | None = None) -> list[dict]:
                         "amount": e["amount"], "repeat": e["repeat"], "overdue": overdue})
             if overdue:
                 break  # only the first unpaid cycle counts as overdue
-    for r in reminders():
+    for r in reminders(user=user):
         due = datetime.fromisoformat(r["due"])
         for d in occurrences(due.date(), r["repeat"], frm, to):
             out.append({"kind": "reminder", "id": r["id"], "title": r["text"], "date": d.isoformat(), "time": due.strftime("%H:%M"),
@@ -375,7 +392,10 @@ def due_now(at: datetime | None = None) -> list[tuple[str, str, str]]:
     out = []
     with db() as c:
         for r in c.execute("SELECT * FROM reminders WHERE done = 0 AND due <= ?", (_iso(at),)).fetchall():
-            out.append(("reminder", "Reminder", r["text"]))
+            if r["user"]:
+                c.execute("INSERT INTO outbox (at, kind, title, text, user) VALUES (?, ?, ?, ?, ?)", (_iso(at), "reminder", "Reminder", r["text"], r["user"]))
+            else:
+                out.append(("reminder", "Reminder", r["text"]))
             if r["repeat"]:
                 due = datetime.fromisoformat(r["due"])
                 nxt = due
@@ -420,15 +440,16 @@ def report_due(report_time: str, at: datetime | None = None, key: str = "report"
         return _once(c, f"{key}:{at.date()}")
 
 
-def record(kind: str, title: str, text: str) -> int:
-    """Put something in the outbox (the app and listening devices pick it up from there)."""
+def record(kind: str, title: str, text: str, user: str | None = None) -> int:
+    """Put something in the outbox (the app and listening devices pick it up from there). user = for one family member only."""
     with db() as c:
-        return c.execute("INSERT INTO outbox (at, kind, title, text) VALUES (?, ?, ?, ?)", (_iso(now()), kind, title, text)).lastrowid
+        return c.execute("INSERT INTO outbox (at, kind, title, text, user) VALUES (?, ?, ?, ?, ?)", (_iso(now()), kind, title, text, user)).lastrowid
 
 
-def outbox(after: int = 0, limit: int = 50) -> list[dict]:
+def outbox(after: int = 0, limit: int = 50, user: str | None = None) -> list[dict]:
+    w, args = _mine(user)
     with db() as c:
-        return [dict(r) for r in c.execute("SELECT * FROM outbox WHERE id > ? ORDER BY id LIMIT ?", (after, limit))]
+        return [dict(r) for r in c.execute(f"SELECT * FROM outbox WHERE id > ? AND {w} ORDER BY id LIMIT ?", (after, *args, limit))]
 
 
 def last_outbox_id() -> int:

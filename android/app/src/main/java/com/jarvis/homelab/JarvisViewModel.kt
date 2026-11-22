@@ -36,7 +36,7 @@ data class ChatMsg(
 
 class JarvisViewModel(app: Application) : AndroidViewModel(app) {
     val prefs = Prefs(app)
-    private val api = Api(prefs)
+    val api = Api(prefs)
 
     var connected by mutableStateOf(prefs.server.isNotEmpty() && prefs.cookie != null)
         private set
@@ -145,13 +145,46 @@ class JarvisViewModel(app: Application) : AndroidViewModel(app) {
 
     // ------------------------------------------------------------ connecting
 
-    fun connect(server: String, password: String) {
+    // ---- who is signed in: family accounts get a smaller app
+    var role by mutableStateOf(prefs.role)
+        private set
+    var me by mutableStateOf<JSONObject?>(null)
+        private set
+    val isFamily get() = role == "family"
+
+    suspend fun loadMe() {
+        io { api.get("/api/me") }?.optJSONObject("user")?.let { u ->
+            me = u
+            role = u.optString("role", "admin")
+            prefs.role = role
+        }
+    }
+
+    /** Single sign-on finished in the web view: keep its session cookie like the password login does. */
+    fun ssoDone(cookie: String?) {
+        val session = cookie?.split(";")?.map { it.trim() }?.firstOrNull { it.startsWith("session=") }
+        prefs.cookie = session  // none at all = a Jarvis without accounts yet (then /api/me still answers)
+        connectError = null
+        viewModelScope.launch {
+            loadMe()
+            if (me != null) {
+                connected = true
+                prefs.loginNagged = false
+                AlertWorker.schedule(getApplication())
+                refreshAll()
+            } else connectError = if (session == null) "Sign-in didn't finish. Try again." else "Signed in, but Jarvis still said no. Try again."
+        }
+    }
+
+    fun connect(server: String, password: String, username: String = "") {
         connecting = true
         connectError = null
         viewModelScope.launch {
-            val err = withContext(Dispatchers.IO) { api.connect(server, password) }
+            val err = withContext(Dispatchers.IO) { api.connect(server, password, username) }
             connecting = false
             if (err == null) {
+                prefs.username = username.trim()
+                loadMe()
                 connected = true
                 prefs.loginNagged = false
                 AlertWorker.schedule(getApplication())
@@ -181,7 +214,10 @@ class JarvisViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun refreshAll() {
-        loadMode(); loadStatus(); loadActivity(); loadPending(); loadPlanner()
+        viewModelScope.launch {
+            loadMe()
+            if (isFamily) { loadPending(); loadPlanner() } else { loadMode(); loadStatus(); loadActivity(); loadPending(); loadPlanner() }
+        }
         viewModelScope.launch(Dispatchers.IO) { if (prefs.alerts) AlertWorker.syncPlanner(getApplication()) }
     }
 
@@ -192,9 +228,11 @@ class JarvisViewModel(app: Application) : AndroidViewModel(app) {
 
     fun loadPlanner() = viewModelScope.launch {
         io { api.get("/api/planner?days=31") }?.let { planner = it }
-        io { api.get("/api/mail?hours=72") }?.let { mail = it }
         io { api.get("/api/life") }?.let { life = it }
-        io { api.get("/api/docs") }?.let { docs = it }
+        if (!isFamily) {  // the owner's email and documents
+            io { api.get("/api/mail?hours=72") }?.let { mail = it }
+            io { api.get("/api/docs") }?.let { docs = it }
+        }
     }
 
     var life by mutableStateOf<JSONObject?>(null)

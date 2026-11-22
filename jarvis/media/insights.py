@@ -11,7 +11,7 @@ from .. import organizer
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS media_requests (id INTEGER PRIMARY KEY, who TEXT, kind TEXT, title TEXT, year INTEGER, ext_id TEXT,
-    status TEXT DEFAULT 'pending', arr_id INTEGER, note TEXT, created TEXT, decided TEXT, ready TEXT);
+    status TEXT DEFAULT 'pending', arr_id INTEGER, note TEXT, created TEXT, decided TEXT, ready TEXT, uid TEXT);
 CREATE TABLE IF NOT EXISTS media_keep (key TEXT PRIMARY KEY, title TEXT, added TEXT);
 """
 
@@ -23,6 +23,13 @@ def _db():
 
 def _ensure(c):
     organizer.ensure(c, SCHEMA)
+    key = ("media-migrations", str(organizer.DB.resolve()))
+    if key not in organizer._ready_extra:
+        try:
+            c.execute("ALTER TABLE media_requests ADD COLUMN uid TEXT")  # who asked, when it was a family member's account
+        except Exception:
+            pass
+        organizer._ready_extra.add(key)
 
 
 def _ts(v) -> float:
@@ -273,7 +280,7 @@ def delete_from_library(stack, kind: str, item: dict) -> None:
 
 # ---------------------------------------------------------------- family requests
 
-def add_request(stack, who: str, kind: str, query: str) -> tuple[int, str]:
+def add_request(stack, who: str, kind: str, query: str, uid: str | None = None) -> tuple[int, str]:
     """Someone asks for a movie or show. Jarvis finds it and queues it for the owner's OK."""
     arr = stack.for_kind(kind)
     if not arr:
@@ -297,8 +304,8 @@ def add_request(stack, who: str, kind: str, query: str) -> tuple[int, str]:
         old = c.execute("SELECT id, status FROM media_requests WHERE kind=? AND ext_id=? AND status IN ('pending','approved')", (kind, ext)).fetchone()
         if old:
             return old["id"], f"{label} is already requested ({old['status']})."
-        rid = c.execute("INSERT INTO media_requests (who, kind, title, year, ext_id, created) VALUES (?,?,?,?,?,?)",
-                        (who, kind, item.get("title"), item.get("year"), ext, datetime.now().strftime("%Y-%m-%dT%H:%M"))).lastrowid
+        rid = c.execute("INSERT INTO media_requests (who, kind, title, year, ext_id, created, uid) VALUES (?,?,?,?,?,?,?)",
+                        (who, kind, item.get("title"), item.get("year"), ext, datetime.now().strftime("%Y-%m-%dT%H:%M"), uid)).lastrowid
     organizer.record("media", "Media request", f"{who} asked for {label}. Say 'requests' to approve or decline.")
     return rid, f"Asked for {label}. You'll hear when it's approved and ready."
 
@@ -342,6 +349,8 @@ def decide(stack, rid: int, approve: bool, note: str = "") -> str:
         _ensure(c)
         c.execute("UPDATE media_requests SET status=?, arr_id=?, note=?, decided=? WHERE id=?",
                   ("approved" if approve else "declined", arr_id, note, datetime.now().strftime("%Y-%m-%dT%H:%M"), rid))
+    if r.get("uid"):
+        organizer.record("media", "Your request", f"{label} was {'approved: it is downloading now' if approve else 'declined'}.", user=r["uid"])
     return f"{'Approved' if approve else 'Declined'} {label} for {r['who']}." + (" It's downloading now." if approve else "")
 
 
@@ -363,5 +372,7 @@ def check_ready(stack) -> list[tuple[str, str]]:
                 c.execute("UPDATE media_requests SET status='ready', ready=? WHERE id=?", (datetime.now().strftime("%Y-%m-%dT%H:%M"), r["id"]))
             text = f"{r['title']} is ready to watch on Plex (asked for by {r['who']})."
             organizer.record("media", "Ready to watch", text)
+            if r.get("uid"):
+                organizer.record("media", "Ready to watch", f"{r['title']} is ready to watch on Plex.", user=r["uid"])
             out.append(("Ready to watch", text))
     return out

@@ -56,6 +56,13 @@ class Prefs(context: Context) {
     var skippedVersion: String?
         get() = sp.getString("skipped_version", null)
         set(v) = sp.edit().putString("skipped_version", v).apply()
+    /** "admin" or "family" (what this account may do), learnt from /api/me after signing in. */
+    var role: String
+        get() = sp.getString("role", "admin") ?: "admin"
+        set(v) = sp.edit().putString("role", v).apply()
+    var username: String
+        get() = sp.getString("username", "") ?: ""
+        set(v) = sp.edit().putString("username", v).apply()
     var loginNagged: Boolean
         get() = sp.getBoolean("login_nagged", false)
         set(v) = sp.edit().putBoolean("login_nagged", v).apply()
@@ -105,7 +112,7 @@ class Api(private val prefs: Prefs) {
         call(path, "POST", json.toString()).let { (c, t) -> check(c, t) }
 
     /** Point the app at a Jarvis and log in. Returns null on success, else a message for the person. */
-    fun connect(server: String, password: String): String? {
+    fun connect(server: String, password: String, username: String = ""): String? {
         var url = server.trim().trimEnd('/')
         if (!url.startsWith("http://") && !url.startsWith("https://")) url = "http://$url"
         prefs.server = url
@@ -115,10 +122,10 @@ class Api(private val prefs: Prefs) {
         }
         if (code == 200) return null           // no dashboard password set
         if (code != 401) return "That address answered HTTP $code. Is it Jarvis?"
-        if (password.isEmpty()) return "This Jarvis has a dashboard password. Enter it above."
-        call("/login", "POST", "password=" + URLEncoder.encode(password, "UTF-8"),
+        if (password.isEmpty()) return "This Jarvis needs you to sign in. Enter your password above, or use single sign-on."
+        call("/login", "POST", "username=" + URLEncoder.encode(username.trim(), "UTF-8") + "&password=" + URLEncoder.encode(password, "UTF-8"),
              "application/x-www-form-urlencoded")
-        if (prefs.cookie == null) return "Wrong password."
+        if (prefs.cookie == null) return "Wrong username or password."
         return if (call("/api/mode").first == 200) null else "Logged in, but Jarvis still said no. Try again."
     }
 
@@ -132,6 +139,15 @@ class Api(private val prefs: Prefs) {
         out.write("\r\n--$boundary--\r\n".toByteArray())
         val (c, t) = call(path, "POST", null, "multipart/form-data; boundary=$boundary", 300_000, out.toByteArray())
         return check(c, t)
+    }
+
+    /** Point the app at a Jarvis without signing in (for single sign-on, which happens in a web view). */
+    fun setServer(server: String): String {
+        var url = server.trim().trimEnd('/')
+        if (!url.startsWith("http://") && !url.startsWith("https://")) url = "http://$url"
+        prefs.server = url
+        prefs.cookie = null
+        return url
     }
 
     fun logout() {

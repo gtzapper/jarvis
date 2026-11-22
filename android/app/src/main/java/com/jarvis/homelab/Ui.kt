@@ -131,7 +131,7 @@ fun JarvisApp(vm: JarvisViewModel, tab: MutableState<String>) {
                 listOf(
                     Triple("chat", "Chat", ChatIcon), Triple("planner", "Planner", Icons.Filled.DateRange), Triple("status", "Status", Icons.Filled.Home),
                     Triple("activity", "Activity", Icons.AutoMirrored.Filled.List), Triple("settings", "Settings", Icons.Filled.Settings),
-                ).forEach { (key, label, icon) ->
+                ).filter { !vm.isFamily || it.first in setOf("chat", "planner", "settings") }.forEach { (key, label, icon) ->
                     NavigationBarItem(
                         selected = tab.value == key,
                         onClick = { tab.value = key; if (key == "activity") vm.loadActivity(); if (key == "status") vm.loadStatus(); if (key == "planner") vm.loadPlanner() },
@@ -150,7 +150,7 @@ fun JarvisApp(vm: JarvisViewModel, tab: MutableState<String>) {
                 Text(it, color = MaterialTheme.colorScheme.onErrorContainer, fontSize = 13.sp,
                     modifier = Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.errorContainer).padding(10.dp))
             }
-            when (tab.value) {
+            when (if (vm.isFamily && tab.value in setOf("status", "activity")) "chat" else tab.value) {
                 "status" -> StatusScreen(vm)
                 "planner" -> PlannerScreen(vm)
                 "activity" -> ActivityScreen(vm)
@@ -167,6 +167,9 @@ fun JarvisApp(vm: JarvisViewModel, tab: MutableState<String>) {
 fun ConnectScreen(vm: JarvisViewModel) {
     var server by rememberSaveable { mutableStateOf(vm.prefs.server) }
     var password by rememberSaveable { mutableStateOf("") }
+    var username by rememberSaveable { mutableStateOf(vm.prefs.username) }
+    var sso by remember { mutableStateOf<String?>(null) }  // the server address while the sign-on web view is open
+    sso?.let { url -> SsoScreen(url, onDone = { cookie -> sso = null; vm.ssoDone(cookie) }, onCancel = { sso = null }); return }
     Column(
         Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).statusBarsPadding().imePadding().padding(24.dp),
         verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally,
@@ -179,15 +182,29 @@ fun ConnectScreen(vm: JarvisViewModel) {
         OutlinedTextField(server, { server = it }, label = { Text("Jarvis address") },
             placeholder = { Text("http://10.0.20.5:8080") }, singleLine = true, modifier = Modifier.fillMaxWidth(),
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Next))
-        Spacer(Modifier.height(10.dp))
-        OutlinedTextField(password, { password = it }, label = { Text("Dashboard password") }, singleLine = true,
-            visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth(),
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, imeAction = ImeAction.Go),
-            keyboardActions = KeyboardActions(onGo = { vm.connect(server, password) }))
-        Spacer(Modifier.height(16.dp))
-        Button({ vm.connect(server, password) }, enabled = server.isNotBlank() && !vm.connecting, modifier = Modifier.fillMaxWidth().height(48.dp)) {
-            if (vm.connecting) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp, color = MaterialTheme.colorScheme.onPrimary)
-            else Text("Connect")
+        Spacer(Modifier.height(14.dp))
+        // single sign-on first: the Jarvis sign-in page (with every provider's button) opens inside the app
+        Button({ sso = vm.api.setServer(server) }, enabled = server.isNotBlank() && !vm.connecting, modifier = Modifier.fillMaxWidth().height(48.dp)) {
+            Text("Sign in")
+        }
+        Text("Opens your Jarvis sign-in page: single sign-on (Authentik, Google...) or your password.",
+            color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp))
+        var showPassword by rememberSaveable { mutableStateOf(false) }
+        TextButton({ showPassword = !showPassword }, modifier = Modifier.padding(top = 4.dp)) {
+            Text(if (showPassword) "Hide username and password" else "Or type a username and password here")
+        }
+        if (showPassword) {
+            OutlinedTextField(username, { username = it }, label = { Text("Username") }, placeholder = { Text("Blank = admin") }, singleLine = true,
+                modifier = Modifier.fillMaxWidth(), keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next, autoCorrectEnabled = false))
+            Spacer(Modifier.height(10.dp))
+            OutlinedTextField(password, { password = it }, label = { Text("Password") }, singleLine = true,
+                visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth(),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, imeAction = ImeAction.Go),
+                keyboardActions = KeyboardActions(onGo = { vm.connect(server, password, username) }))
+            Spacer(Modifier.height(12.dp))
+            OutlinedButton({ vm.connect(server, password, username) }, enabled = server.isNotBlank() && !vm.connecting, modifier = Modifier.fillMaxWidth().height(48.dp)) {
+                if (vm.connecting) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp) else Text("Connect")
+            }
         }
         vm.connectError?.let {
             Spacer(Modifier.height(12.dp))
@@ -195,7 +212,7 @@ fun ConnectScreen(vm: JarvisViewModel) {
         }
         Spacer(Modifier.height(20.dp))
         Text("Use the address you open the dashboard with. Your phone needs to be on your home network, or connected to it by VPN. " +
-            "The password isn't stored; the app keeps the login like a browser does.",
+            "Your password is never stored; the app keeps the sign-in like a browser does. Got an invitation email? Open its link first to create your account.",
             color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
     }
 }
@@ -466,8 +483,10 @@ fun PlannerScreen(vm: JarvisViewModel) {
         item { PhoneCalendarRow(vm) }
         item {
             SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
-                listOf("upcoming" to "Soon", "lists" to "Lists", "mail" to "Mail", "media" to "Media", "docs" to "Docs", "notes" to "Notes").forEachIndexed { i, (key, label) ->
-                    SegmentedButton(selected = section == key, onClick = { section = key; if (key == "media") vm.loadMedia() }, shape = SegmentedButtonDefaults.itemShape(i, 6),
+                val sections = listOf("upcoming" to "Soon", "lists" to "Lists", "mail" to "Mail", "media" to "Media", "docs" to "Docs", "notes" to "Notes")
+                    .filter { !vm.isFamily || it.first !in setOf("mail", "docs") }
+                sections.forEachIndexed { i, (key, label) ->
+                    SegmentedButton(selected = section == key, onClick = { section = key; if (key == "media") vm.loadMedia() }, shape = SegmentedButtonDefaults.itemShape(i, sections.size),
                         icon = {}) { Text(label, fontSize = 11.sp, maxLines = 1) }
                 }
             }
@@ -668,8 +687,10 @@ private fun androidx.compose.foundation.lazy.LazyListScope.mediaItems(vm: Jarvis
             }
             OutlinedTextField(title, { title = it }, Modifier.fillMaxWidth(), singleLine = true, placeholder = { Text("Title") })
             Row(verticalAlignment = Alignment.CenterVertically) {
-                OutlinedTextField(who, { who = it }, Modifier.weight(1f), singleLine = true, placeholder = { Text("For (name)") })
-                Spacer(Modifier.width(8.dp))
+                if (!vm.isFamily) {
+                    OutlinedTextField(who, { who = it }, Modifier.weight(1f), singleLine = true, placeholder = { Text("For (name)") })
+                    Spacer(Modifier.width(8.dp))
+                } else Spacer(Modifier.weight(1f))
                 Button({ if (title.isNotBlank()) { vm.requestMedia(kind, title.trim(), who.trim()); title = "" } }) { Text("Request") }
             }
             vm.mediaNote?.let { Text(it, fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant) }
@@ -685,7 +706,7 @@ private fun androidx.compose.foundation.lazy.LazyListScope.mediaItems(vm: Jarvis
             val st = r.optString("status")
             InfoRow("${r.optString("title")} (${r.str("year").ifEmpty { "?" }})", "${r.optString("kind")} · for ${r.optString("who")} · ${label[st] ?: st}",
                 when (st) { "pending" -> MaterialTheme.colorScheme.error; "ready" -> MaterialTheme.colorScheme.primary; else -> MaterialTheme.colorScheme.tertiary }) {
-                if (st == "pending") {
+                if (st == "pending" && !vm.isFamily) {
                     TextButton({ vm.decideMedia(r.optInt("id"), true) }) { Text("Approve") }
                     TextButton({ vm.decideMedia(r.optInt("id"), false) }) { Text("No") }
                 }
@@ -917,6 +938,7 @@ fun SettingsScreen(vm: JarvisViewModel) {
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
         Text("Settings", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
         Text("Connected to ${vm.prefs.server}", color = c.onSurfaceVariant)
+        vm.me?.let { u -> Text("Signed in as ${u.optString("name")} (${if (vm.isFamily) "family" else "admin"})", color = c.onSurfaceVariant, fontSize = 13.sp) }
 
         SectionTitle("Theme")
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -933,8 +955,10 @@ fun SettingsScreen(vm: JarvisViewModel) {
         }
         SettingRow("Speak replies", "Read Jarvis's answer aloud when you asked by voice", speak) { speak = it; vm.prefs.speak = it }
 
-        SectionTitle("Location")
-        LocationRow(vm)
+        if (!vm.isFamily) {
+            SectionTitle("Location")
+            LocationRow(vm)
+        }
 
         SectionTitle("App updates")
         SettingRow("Check automatically", "Look for a new version once a day", autoUpdate) { autoUpdate = it; vm.prefs.autoUpdate = it }

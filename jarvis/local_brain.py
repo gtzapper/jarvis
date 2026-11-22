@@ -90,11 +90,12 @@ class OllamaBrain(Brain):
         self.unreachable = False
 
     def _chat(self, messages: list, tools: bool = True) -> dict:
-        body = {"model": self.model, "messages": [{"role": "system", "content": system_prompt(self.cfg, local=True)}] + messages,
+        body = {"model": self.model, "messages": [{"role": "system", "content": self.system(local=True)}] + messages,
                 "stream": False, "keep_alive": self.keep_alive,
                 "options": {"num_ctx": self.num_ctx, "temperature": 0.2}}
         if tools:
-            body["tools"] = OLLAMA_TOOLS
+            names = {t["name"] for t in self.tools()}
+            body["tools"] = [t for t in OLLAMA_TOOLS if t["function"]["name"] in names]
         if self.think is not None:
             body["think"] = self.think
         try:

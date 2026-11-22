@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>Join Jarvis</title>
+<link rel="icon" href="/icon-192.png" type="image/png">
+<meta name="theme-color" content="#0f1216">
+<link rel="stylesheet" href="/themes.css">
+<script src="/theme.js"></script>
+<style>
+body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: var(--bg); color: var(--text); font: 14px system-ui, -apple-system, "Segoe UI", sans-serif; padding: 16px; box-sizing: border-box; }
+.box { background: var(--panel); border: 1px solid var(--line); border-radius: 16px; padding: 28px; width: 100%; max-width: 400px; box-sizing: border-box; }
+.logo { display: flex; align-items: center; gap: 10px; margin-bottom: 18px; } .logo img { width: 40px; height: 40px; border-radius: 10px; }
+h1 { margin: 0; font-size: 20px; } h2 { font-size: 18px; margin: 0 0 6px; } p { color: var(--muted); margin: 0 0 16px; line-height: 1.45; }
+.sso { display: block; text-align: center; padding: 12px; border-radius: 10px; background: var(--accent); color: var(--accent-text); text-decoration: none; font-weight: 600; font-size: 15px; margin-bottom: 10px; }
+.sso.alt { background: var(--panel2); color: var(--text); border: 1px solid var(--line); }
+.or { display: flex; align-items: center; gap: 10px; color: var(--muted); margin: 14px 0; } .or::before, .or::after { content: ""; flex: 1; border-top: 1px solid var(--line); }
+label { display: block; font-size: 12px; color: var(--muted); margin: 0 0 4px; }
+input { width: 100%; box-sizing: border-box; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg); color: var(--text); font: inherit; margin-bottom: 12px; }
+button { width: 100%; padding: 11px; border: 0; border-radius: 8px; background: var(--accent); color: var(--accent-text); font: inherit; font-weight: 600; cursor: pointer; }
+button:disabled { opacity: .6; }
+.err { background: color-mix(in srgb, var(--crit) 15%, transparent); border-radius: 8px; padding: 8px 10px; margin-bottom: 12px; }
+.pill { display: inline-block; font-size: 12px; padding: 2px 8px; border-radius: 999px; background: var(--panel2); border: 1px solid var(--line); color: var(--text); }
+</style>
+</head>
+<body>
+<div class="box">
+  <div class="logo"><img src="/icon-192.png" alt=""><h1>JARVIS</h1></div>
+  <div id="content"><p>Checking your invitation...</p></div>
+</div>
+<script>
+let token = decodeURIComponent(location.pathname.split("/").pop());
+try { if (token === "…") token = sessionStorage.getItem("jarvis.invite") || token; else sessionStorage.setItem("jarvis.invite", token); } catch {}
+history.replaceState(null, "", "/invite/…");  // keep the secret link out of the address bar (and history) once loaded
+const c = document.getElementById("content");
+const esc = s => String(s ?? "").replace(/[&<>"']/g, ch => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
+fetch("/api/invite/" + encodeURIComponent(token)).then(r => r.json()).then(d => {
+  if (!d.ok) { c.innerHTML = `<h2>This link doesn't work</h2><p>${esc(d.error)}</p><p><a href="/login">Go to the sign-in page</a></p>`; return; }
+  const what = d.role === "admin" ? "an <b>admin</b> account (full access)" :
+    "a <b>family</b> account: chat with Jarvis, the shared shopping and to-do lists, your own reminders and notes, and asking for movies and shows";
+  let html = `<h2>Welcome${d.name ? ", " + esc(d.name) : ""}!</h2>
+    <p>${esc(d.invited_by || "The owner")} invited <span class="pill">${esc(d.email)}</span> to Jarvis. You'll get ${what}.</p>`;
+  (d.providers || []).forEach((p, i) => {
+    html += `<a class="sso${i ? " alt" : ""}" href="/auth/sso?p=${encodeURIComponent(p.key)}&invite=${encodeURIComponent(token)}">Continue with ${esc(p.label)}</a>`;
+  });
+  if (d.password) {
+    if ((d.providers || []).length) html += `<div class="or"><span>or pick a password</span></div>`;
+    html += `<div id="err" class="err" hidden></div>
+      <label>Your name</label><input id="name" value="${esc(d.name)}" autocomplete="name">
+      <label>Username</label><input id="username" value="${esc(d.suggested)}" autocapitalize="none" spellcheck="false" autocomplete="username">
+      <label>Password (8 or more characters)</label><input id="password" type="password" autocomplete="new-password">
+      <button id="go">Create my account</button>`;
+  }
+  c.innerHTML = html;
+  const go = document.getElementById("go");
+  if (go) go.onclick = async () => {
+    go.disabled = true;
+    const r = await fetch("/api/invite/" + encodeURIComponent(token), { method: "POST", headers: { "Content-Type": "application/json", "X-Jarvis": "1" },
+      body: JSON.stringify({ name: document.getElementById("name").value, username: document.getElementById("username").value, password: document.getElementById("password").value }) }).then(r => r.json());
+    if (r.ok) { location.replace("/"); return; }
+    const e = document.getElementById("err"); e.hidden = false; e.textContent = r.error; go.disabled = false;
+  };
+}).catch(() => { c.innerHTML = "<p>Couldn't reach Jarvis. Try again in a moment.</p>"; });
+</script>
+</body>
+</html>

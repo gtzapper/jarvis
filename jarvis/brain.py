@@ -58,10 +58,21 @@ MODE_NOTES = {
 }
 
 
-def system_prompt(cfg: dict, local: bool = False) -> str:
+# A family member's AI gets only these (and the server refuses anything else anyway)
+FAMILY_TOOLS = {"weather", "add_to_list", "show_list", "check_off", "add_reminder", "list_reminders", "cancel_reminder",
+                "add_note", "search_notes", "watch_suggestions", "request_media", "plex_recently_added", "plex_now_playing",
+                "upcoming_releases", "web_search", "read_web_page"}
+
+FAMILY_NOTE = """You are talking with {name}, a family member of the household (not the owner). You can help with shared lists, their own reminders and notes, the weather, what to watch from the family's Plex library, asking for a movie or show (request_media: the owner approves it), and web search. You can't see or change the homelab, email, calendar, bills, locations or settings: if they ask, say that's something the owner handles. Keep answers friendly and simple."""
+
+
+def system_prompt(cfg: dict, local: bool = False, user: dict | None = None) -> str:
     from datetime import datetime
     from . import modes
     now = datetime.now()
+    if user and user.get("role") == "family":
+        return (FAMILY_NOTE.format(name=user.get("name") or user.get("username")) + ("\n\n" + LOCAL_EXTRA if local else "") +
+                f"\n\nCurrent local date and time: {now:%A %Y-%m-%d %H:%M}. Use it to turn 'tomorrow' or 'in 2 hours' into exact times.")
     from .life import memory_prompt
     try:
         memory = memory_prompt()
@@ -171,10 +182,11 @@ TOOLS = [
                               "disk_gb": {"type": ["integer", "null"]}})},
     {"name": "check_vm_setup", "description": "Dry-run check of everything VM creation needs. Changes nothing.", "input_schema": _schema({})},
     {"name": "add_reminder", "description": "Set a reminder. Work out the exact local date and time from what the user said and the "
-     "current time in the system prompt. repeat: '' (once), daily, weekdays, weekly, monthly or yearly.",
+     "current time in the system prompt. repeat is 'once' unless the user clearly asked for a repeating reminder.",
      "input_schema": _schema({"text": {"type": "string", "description": "What to remind them about, short"},
                               "when": {"type": "string", "description": "Local date and time, YYYY-MM-DDTHH:MM"},
-                              "repeat": {"type": "string", "enum": ["", "daily", "weekdays", "weekly", "monthly", "yearly"]}})},
+                              "repeat": {"type": "string", "enum": ["once", "daily", "weekdays", "weekly", "monthly", "yearly"],
+                                         "description": "'once' unless the user said it repeats (every day, each Monday...)"}})},
     {"name": "list_reminders", "description": "The user's reminders, numbered by id.", "input_schema": _schema({})},
     {"name": "cancel_reminder", "description": "Cancel a reminder by its id from list_reminders.", "input_schema": _schema({"id": {"type": "integer"}})},
     {"name": "add_note", "description": "Save a note for the user (facts to remember, like a device model or a password hint location).",
@@ -382,6 +394,16 @@ class Brain:
     def reset(self) -> None:
         self.messages = []
 
+    @property
+    def family(self) -> bool:
+        return bool(getattr(self.assistant, "family", False))
+
+    def tools(self) -> list:
+        return [t for t in TOOLS if t["name"] in FAMILY_TOOLS] if self.family else TOOLS
+
+    def system(self, local: bool = False) -> str:
+        return system_prompt(self.cfg, local, getattr(self.assistant, "user", None))
+
     # ------------------------------------------------------------ tools
 
     def _status_text(self, system: str | None) -> str:
@@ -506,10 +528,11 @@ class Brain:
         from datetime import datetime
         from . import organizer as O
         when = datetime.fromisoformat(a["when"])
-        if when < O.now() and not a.get("repeat"):
+        repeat = "" if a.get("repeat") in (None, "", "once") else a["repeat"]
+        if when < O.now() and not repeat:
             raise ValueError(f"{a['when']} is in the past. Use a future time.")
-        rid = O.add_reminder(a["text"], when, a.get("repeat") or "")
-        return f"Reminder {rid} set: {a['text']} at {when:%a %d %b %H:%M}" + (f", repeating {a['repeat']}" if a.get("repeat") else "")
+        rid = O.add_reminder(a["text"], when, repeat, user=getattr(self.assistant, "uid", None))
+        return f"Reminder {rid} set: {a['text']} at {when:%a %d %b %H:%M}" + (f", repeating {repeat}" if repeat else ", once")
 
     def _where_was_i(self, when: str) -> str:
         from datetime import datetime
@@ -540,7 +563,7 @@ class Brain:
 
     def _search_notes(self, q: str) -> str:
         from . import organizer as O
-        ns = O.notes(q, limit=8)
+        ns = O.notes(q, limit=8, user=getattr(self.assistant, "uid", None))
         return "\n".join(f"{n['id']}. {n['text']} ({n['created'][:10]})" for n in ns) or "No matching notes."
 
     def _add_calendar_item(self, a: dict) -> str:
@@ -555,6 +578,8 @@ class Brain:
         """Run one tool. Returns (text for the model, is_error)."""
         from .commands import _NotSetUp
         self.assistant.declined = False
+        if self.family and name not in FAMILY_TOOLS:
+            return "That tool isn't available in a family member's chat. Tell them it's something the owner handles.", True
         try:
             content = self.run_tool(name, args) or "(done, no output)"
             if getattr(self.assistant, "declined", False):
@@ -610,8 +635,8 @@ class Brain:
             response = self.client.beta.messages.create(
                 model=self.model,
                 max_tokens=16000,
-                system=system_prompt(self.cfg),
-                tools=TOOLS,
+                system=self.system(),
+                tools=self.tools(),
                 messages=self.messages,
                 thinking={"type": "adaptive", "display": "updates"},
                 output_config={"effort": self.effort},
@@ -652,7 +677,7 @@ class Brain:
             self.messages.append({"role": "user", "content": results})
         self.messages.append({"role": "user", "content": "Stop using tools now and tell me where things stand."})
         final = self.client.beta.messages.create(
-            model=self.model, max_tokens=4000, system=system_prompt(self.cfg), tools=TOOLS, messages=self.messages,
+            model=self.model, max_tokens=4000, system=self.system(), tools=self.tools(), messages=self.messages,
             output_config={"effort": "low"}, betas=BETAS, fallbacks="default")
         self.messages.append({"role": "assistant", "content": _history_content(final.content)})
         return "\n".join(b.text for b in final.content if b.type == "text").strip() or "I ran out of steps on that one."

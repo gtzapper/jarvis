@@ -19,6 +19,21 @@ KINDS = {
 }
 KIND_WORDS = "|".join(sorted(KINDS, key=len, reverse=True))
 
+# What a family member's chat can do (everything else is the owner's)
+FAMILY_COMMANDS = {"help", "new_chat", "remind", "list_reminders", "cancel_reminder", "add_note", "list_notes", "find_notes",
+                   "list_add", "show_list", "list_check_cmd", "list_remove", "list_clear", "weather", "watch_cmd",
+                   "request_media_cmd", "recent", "upcoming", "playing", "web_search"}
+
+FAMILY_HELP = """Things I can help with:
+  remind me in 20 minutes to check the oven / reminders / cancel reminder 3
+  note: the wifi password is on the fridge / notes / find notes wifi
+  add milk and eggs to the shopping list / shopping list / got milk
+  weather / weather tomorrow / will it rain
+  what should I watch / recent / upcoming releases / who's watching
+  request the movie The Wild Robot / request the show Bluey   (the owner approves it; you hear when it's ready)
+  search the web for ...   (if the owner has set up web search)
+Your reminders and notes are your own. Lists are shared with the household."""
+
 HELP = """Things I understand:
   status                         how is everything (the whole lab)
   media status                   just the media stack
@@ -102,8 +117,11 @@ class Assistant:
     def __init__(self, cfg: dict, stack: MediaStack | None = None,
                  confirm: Callable[[str], bool] = ask_yes,
                  choose: Callable[[list[str]], int | None] = ask_choice,
-                 say: Callable[[str], None] = print):
+                 say: Callable[[str], None] = print, user: dict | None = None):
         self.cfg = cfg
+        self.user = user  # a family member's account limits what this assistant can do; None = the owner
+        self.family = bool(user and user.get("role") == "family")
+        self.uid = user["id"] if self.family else None  # whose reminders and notes
         self.stack = stack if stack is not None else MediaStack(cfg)
         self.confirm = confirm
         self.confirm_code = ask_yes_with_code  # destructive actions when two-factor approval is on
@@ -212,6 +230,8 @@ class Assistant:
             (r"^test indexers$", self.test_indexers),
         ]
         self.rules = [(re.compile(p, re.IGNORECASE), f) for p, f in self.rules]
+        if self.family:
+            self.rules = [(p, f) for p, f in self.rules if f.__name__ in FAMILY_COMMANDS]
         # With the AI on, these still answer instantly; everything else goes to the AI, which uses the
         # same handlers as tools but can work out multi-step jobs and recover when a step fails.
         self.direct = {self.help, self.new_chat, self.set_mode}
@@ -227,6 +247,8 @@ class Assistant:
             if rule and getattr(self.brain, "unreachable", False):
                 return f"({reply} So I used my built-in command instead.)\n" + self._call(*rule)
             return reply
+        if self.family:
+            return "Sorry, that's not something I can do for you. Say 'help' to see what I can."
         return "Sorry, I didn't understand that. Type 'help' to see what I can do. (Set up the AI brain in Setup to talk in plain English.)"
 
     def _call(self, fn, m) -> str:
@@ -257,6 +279,10 @@ class Assistant:
                'outward'     sends something in your name (an email): always asks, whatever the mode"""
         from .audit import audit
         mode = self.mode
+        if self.family and level in ("destructive", "outward", "change"):
+            what = doing or question.splitlines()[0].split("?")[0]
+            audit(f"BLOCKED (family account {self.user.get('username')}): {what}")
+            raise Blocked("That's something only the owner can do.")
         if mode == "read-only" and level != "read":
             what = doing or question.splitlines()[0].split("?")[0]
             audit(f"BLOCKED (read-only mode): {what}")
@@ -305,6 +331,8 @@ class Assistant:
         return modes.MODES[new]
 
     def help(self, m) -> str:
+        if self.family:
+            return FAMILY_HELP
         return HELP + f"\n\nMode: {modes.MODES[self.mode]}"
 
     # ------------------------------------------------------------ helpers
@@ -828,14 +856,14 @@ class Assistant:
         if not when:
             return "When should I remind you? For example: remind me in 20 minutes to check the oven, or remind me tomorrow at 9 to call mum."
         what = re.sub(r"^(to|that|about)\s+", "", what, flags=re.I) or "Reminder"
-        rid = O.add_reminder(what, when, repeat)
+        rid = O.add_reminder(what, when, repeat, user=self.uid)
         rep = f", repeating {repeat}" if repeat else ""
         return f"OK, I'll remind you to {what} {when:%a %d %b at %H:%M}{rep}. (Reminder {rid})"
 
     def list_reminders(self, m) -> str:
         from datetime import datetime
         from . import organizer as O
-        rs = O.reminders()
+        rs = O.reminders(user=self.uid)
         if not rs:
             return "No reminders set."
         return "Reminders:\n" + "\n".join(f"  {r['id']}. {r['text']}: {datetime.fromisoformat(r['due']):%a %d %b %H:%M}"
@@ -843,21 +871,21 @@ class Assistant:
 
     def cancel_reminder(self, m) -> str:
         from . import organizer as O
-        return "Cancelled." if O.cancel_reminder(int(m["n"])) else f"There's no reminder {m['n']}."
+        return "Cancelled." if O.cancel_reminder(int(m["n"]), user=self.uid) else f"There's no reminder {m['n']}."
 
     def add_note(self, m) -> str:
         from . import organizer as O
-        nid = O.add_note(m.m["text"])
+        nid = O.add_note(m.m["text"], user=self.uid)
         return f"Noted. (Note {nid})"
 
     def list_notes(self, m) -> str:
         from . import organizer as O
-        ns = O.notes(limit=15)
+        ns = O.notes(limit=15, user=self.uid)
         return ("Latest notes:\n" + "\n".join(f"  {n['id']}. {n['text']}" for n in ns)) if ns else "No notes yet. Say: note, then what to remember."
 
     def find_notes(self, m) -> str:
         from . import organizer as O
-        ns = O.notes(m.m["q"], limit=8)
+        ns = O.notes(m.m["q"], limit=8, user=self.uid)
         return ("\n".join(f"  {n['id']}. {n['text']} ({n['created'][:10]})" for n in ns)) if ns else f"Nothing in your notes about {m.m['q']}."
 
     def agenda(self, m) -> str:
@@ -1381,8 +1409,10 @@ class Assistant:
 
     def request_media(self, kind: str, title: str, who: str = "you") -> str:
         from .media import insights
+        if self.family:
+            who = self.user.get("name") or self.user.get("username")
         try:
-            return insights.add_request(self.stack, who or "you", KINDS.get(kind, kind), title)[1]
+            return insights.add_request(self.stack, who or "you", KINDS.get(kind, kind), title, uid=self.uid)[1]
         except LookupError as e:
             return str(e)
 

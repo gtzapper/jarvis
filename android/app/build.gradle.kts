@@ -24,8 +24,8 @@ android {
         minSdk = 26
         targetSdk = 35
         // Bump both for every release, and tag the GitHub release android-v<versionName>.
-        versionCode = 13
-        versionName = "2.2"
+        versionCode = 14
+        versionName = "2.3"
     }
 
     signingConfigs {

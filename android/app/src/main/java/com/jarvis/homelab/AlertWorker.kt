@@ -30,6 +30,7 @@ class AlertWorker(context: Context, params: WorkerParameters) : CoroutineWorker(
         val prefs = Prefs(applicationContext)
         if (!prefs.alerts || prefs.server.isEmpty()) return Result.success()
         syncPlanner(applicationContext)
+        if (prefs.role == "family") return Result.success()  // lab alerts are for the owner; family get their reminders via syncPlanner
         val status = try {
             Api(prefs).get("/api/status")
         } catch (e: AuthNeeded) {
