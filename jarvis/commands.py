@@ -9,11 +9,8 @@ import requests
 from .media.clients import MediaStack, PlexClient
 from .media.downloaders import fmt_speed
 
-RISKY = re.compile(r"\brm\s+-\w*[rf]|\bmkfs|\bdd\s+if=|\b(shutdown|reboot|poweroff|halt)\b|>\s*/dev/(sd|nvme|vd)|\bwipefs|\bfdisk|\bparted"
-                   r"|:\(\)\s*\{|\bchmod\s+-R|\bchown\s+-R|\buserdel|\bsystemctl\s+(stop|disable|mask)|\bdocker\s+(rm|system\s+prune|volume\s+rm)"
-                   r"|\bapt(-get)?\s+(remove|purge|autoremove)|\biptables\s+-F|\bkill(all)?\b"
-                   r"|Remove-Item.*-Recurse|\b(Restart|Stop)-Computer\b|\bStop-(Service|Process)\b|\bFormat-Volume\b|\bClear-Disk\b"
-                   r"|\bdiskpart\b|\b(del|rd|rmdir)\s+/s|\bRemove-(LocalUser|VM|Partition)\b|\bDisable-NetAdapter\b", re.IGNORECASE)
+from . import modes
+from .modes import RISKY  # noqa: F401  (kept for anything importing it from here)
 
 KINDS = {
     "movie": "movie", "movies": "movie", "film": "movie", "films": "movie",
@@ -53,10 +50,12 @@ HELP = """Things I understand:
   update everything              every machine Jarvis may run commands on
   restart sonarr on docker-vm    restart one container
   clean up docker on X           remove unused images and build cache
-  reboot docker-vm               restart the machine (asks first)
+  reboot docker-vm               restart the machine (always asks)
+  auto mode / ask mode / read-only mode   how much I do without asking (see 'mode')
   new chat                       start a fresh AI conversation
   help                           this list
-With the AI brain set up, you can also just say what you want in plain English."""
+With the AI brain set up, just say what you want in plain English: I work out the steps, retry when
+something fails, and tell you what I'm doing as I go."""
 
 
 def ask_yes(question: str) -> bool:
@@ -88,8 +87,10 @@ class Assistant:
         self.last_requests: list[dict] = []   # from the last "requests"
         self.last_items: list[tuple] = []     # (client, item) from the last "torrents"
         self.rules: list[tuple[re.Pattern, Callable]] = [
-            (r"^(help|\?|what can you do)$", lambda m: HELP),
+            (r"^(help|\?|what can you do)$", self.help),
             (r"^(new chat|new conversation|reset|forget (it|that|everything))$", self.new_chat),
+            (r"^((switch|change|go|set)( to| mode( to)?)? )?(?P<mode>ask|manual|careful|auto|automatic|normal|read[- ]?only|plan|look only|dry[- ]run)( mode)?$", self.set_mode),
+            (r"^(mode|what mode|which mode|what mode are you in|permission mode)$", self.set_mode),
             (r"^(hosts|list hosts|machines|servers)$", self.hosts),
             (r"^(scan proxmox|discover( vms| guests)?|find (my )?(vms|guests|containers))$", self.discover),
             (r"^(run|exec|execute) (?P<cmd>.+?) on (?P<host>[\w.-]+)$", self.run),
@@ -127,27 +128,79 @@ class Assistant:
             (r"^test indexers$", self.test_indexers),
         ]
         self.rules = [(re.compile(p, re.IGNORECASE), f) for p, f in self.rules]
+        # With the AI on, these still answer instantly; everything else goes to the AI, which uses the
+        # same handlers as tools but can work out multi-step jobs and recover when a step fails.
+        self.direct = {self.help, self.new_chat, self.set_mode}
 
     def handle(self, text: str) -> str:
         # Keep the original case: shell commands and paths are case-sensitive.
         t = re.sub(r"^((hey|ok) )?jarvis[,:]?\s*|^please\s+|\s*please$|\?+$", "", text.strip(), flags=re.IGNORECASE).strip()
-        for pattern, fn in self.rules:
-            m = pattern.match(t)
-            if m:
-                m = _Match(m)
-                try:
-                    return fn(m)
-                except requests.HTTPError as e:
-                    return f"The service answered with an error: HTTP {e.response.status_code} on {e.request.url.split('?')[0]}"
-                except requests.RequestException as e:
-                    return f"I couldn't reach that service: {type(e).__name__}"
-                except _NotSetUp as e:
-                    return str(e)
-                except Exception as e:  # never let one bad answer kill the chat
-                    return f"Something went wrong: {type(e).__name__}: {e}"
-        if self.brain:  # anything that isn't an exact command goes to the AI
-            return self.brain.ask(text, self.say)
+        rule = next(((fn, m) for pattern, fn in self.rules if (m := pattern.match(t))), None)
+        if rule and (not self.brain or rule[0] in self.direct):
+            return self._call(*rule)
+        if self.brain:
+            reply = self.brain.ask(text, self.say)
+            if rule and getattr(self.brain, "unreachable", False):
+                return f"({reply} So I used my built-in command instead.)\n" + self._call(*rule)
+            return reply
         return "Sorry, I didn't understand that. Type 'help' to see what I can do. (Set up the AI brain in Setup to talk in plain English.)"
+
+    def _call(self, fn, m) -> str:
+        try:
+            return fn(_Match(m))
+        except requests.HTTPError as e:
+            return f"The service answered with an error: HTTP {e.response.status_code} on {e.request.url.split('?')[0]}"
+        except requests.RequestException as e:
+            return f"I couldn't reach that service: {type(e).__name__}"
+        except _NotSetUp as e:
+            return str(e)
+        except Exception as e:  # never let one bad answer kill the chat
+            return f"Something went wrong: {type(e).__name__}: {e}"
+
+    # ------------------------------------------------------------ permission modes
+
+    @property
+    def mode(self) -> str:
+        return modes.get(self.cfg)
+
+    def allow(self, question: str, level: str = "change", doing: str | None = None) -> bool:
+        """The one gate every action passes through.
+
+        level: 'read'        only looks (run_command with df, docker ps...): asks only in Ask mode
+               'safe'        harmless change (pause, refresh Plex): never asks, blocked in Read-only
+               'change'      everyday change: asks in Ask mode, just happens in Auto
+               'destructive' deletes, reboots, stops things: always asks, whatever the mode"""
+        from .audit import audit
+        mode = self.mode
+        if mode == "read-only" and level != "read":
+            what = doing or question.splitlines()[0].split("?")[0]
+            audit(f"BLOCKED (read-only mode): {what}")
+            raise Blocked(f"Read-only mode is on, so this was blocked: {what}. Say 'auto mode' or 'ask mode' to let me make changes.")
+        if level == "destructive":
+            return self._asked(self.confirm("[destructive] " + question))
+        if mode == "ask" and level in ("change", "read"):
+            return self._asked(self.confirm(question))
+        if level == "change":
+            what = doing or question.splitlines()[0].split("?")[0]
+            self.say(f"{what} (auto mode: not destructive, so I didn't ask)")
+            audit(f"AUTO-approved: {what}")
+        return True
+
+    def _asked(self, yes: bool) -> bool:
+        if not yes:
+            self.declined = True  # the AI is told plainly, so it doesn't misread "Okay, not rebooting."
+        return yes
+
+    def set_mode(self, m) -> str:
+        if not m["mode"]:
+            return f"Mode: {modes.MODES[self.mode]}\nSwitch with 'ask mode', 'auto mode' or 'read-only mode'. Destructive actions always ask, in every mode."
+        from .audit import audit
+        new = modes.set_mode(m["mode"])
+        audit(f"mode set to {new}")
+        return modes.MODES[new]
+
+    def help(self, m) -> str:
+        return HELP + f"\n\nMode: {modes.MODES[self.mode]}"
 
     # ------------------------------------------------------------ helpers
 
@@ -213,7 +266,7 @@ class Assistant:
             return "Run 'downloads' first so I know which one you mean."
         arr, item = self.last_queue[n - 1]
         title = item.get("title", "?")
-        if not self.confirm(f"Remove '{title}' from {arr.name} and the download client, and blocklist that release so it grabs a different one?"):
+        if not self.allow(f"Remove '{title}' from {arr.name} and the download client (its files are deleted), and blocklist that release so it grabs a different one?", "destructive"):
             return "Okay, left it alone."
         arr.remove_from_queue(item["id"], blocklist=True)
         self.last_queue.pop(n - 1)
@@ -259,6 +312,7 @@ class Assistant:
             return "Run 'torrents' first so I know which one you mean."
         client, item = self.last_items[n - 1]
         pausing = m["act"] in ("pause", "stop")
+        self.allow(f"{'Pause' if pausing else 'Resume'} {item['name'][:70]}", "safe")
         (client.pause if pausing else client.resume)([item["id"]])
         return f"{'Paused' if pausing else 'Resumed'} {item['name'][:70]} in {client.name}."
 
@@ -266,6 +320,7 @@ class Assistant:
         what = m["what"] if m["what"] not in ("downloads", "downloading", "everything") else None
         clients = self._downloaders(what)
         pausing = m["act"] in ("pause", "stop")
+        self.allow(f"{'Pause' if pausing else 'Resume'} " + ", ".join(c.name for c in clients), "safe")
         for c in clients:
             (c.pause if pausing else c.resume)()
         return f"{'Paused' if pausing else 'Resumed'} " + ", ".join(c.name for c in clients) + "."
@@ -273,6 +328,7 @@ class Assistant:
     def slow_mode(self, m) -> str:
         on = not m["fast"] and m["state"] != "off"
         clients = self._downloaders()
+        self.allow("Turn slow mode " + ("on" if on else "off"), "safe")
         for c in clients:
             c.set_slow(on)
         return ("Slow mode on for " if on else "Back to full speed on ") + ", ".join(c.name for c in clients) + "."
@@ -315,9 +371,13 @@ class Assistant:
             names = ", ".join(h["name"] for h in self._hosts()) or "none"
             return f"I don't know a host called '{m['host']}' that allows commands. Known: {names}."
         cmd = m["cmd"].strip()
-        warning = "\n  WARNING: this looks destructive or disruptive." if RISKY.search(cmd) else ""
+        level = modes.classify(cmd, host.get("os") == "windows")
+        warning = "\n  WARNING: this looks destructive or disruptive." if level == "destructive" else ""
         shell = " in PowerShell" if host.get("os") == "windows" else ""
-        if not self.confirm(f"Run{shell} on {host['name']} ({host.get('user', 'root')}@{host['host']}):\n    {cmd}{warning}\nGo ahead?"):
+        if level == "read" and self.mode != "ask":
+            self.say(f"Running on {host['name']}: {cmd}")
+        if not self.allow(f"Run{shell} on {host['name']} ({host.get('user', 'root')}@{host['host']}):\n    {cmd}{warning}\nGo ahead?",
+                          level, doing=f"Running on {host['name']}: {cmd}"):
             audit(f"run DECLINED on {host['name']}: {cmd}")
             return "Okay, not running it."
         timeout = host.get("command_timeout", 120)
@@ -350,7 +410,8 @@ class Assistant:
             st = updater.check()
             if not st["new"]:
                 return f"Already on the latest version ({st['commit']})."
-            if not self.confirm(f"Update Jarvis from {st['commit']} with {len(st['new'])} new change(s)? I'll restart afterwards."):
+            if not self.allow(f"Update Jarvis from {st['commit']} with {len(st['new'])} new change(s)? I'll restart afterwards.",
+                              doing=f"Updating Jarvis with {len(st['new'])} new change(s), then restarting"):
                 return "Okay, not updating."
             result = updater.apply()
         except updater.UpdateError as e:
@@ -442,7 +503,7 @@ class Assistant:
             return ""
         names = ", ".join(h["name"] for h in hosts)
         verb = "needs" if len(hosts) == 1 else "need"
-        if not self.confirm(f"{names} {verb} a reboot to finish updating. Reboot now?\n  WARNING: anything running there stops until it's back."):
+        if not self.allow(f"{names} {verb} a reboot to finish updating. Reboot now?\n  WARNING: anything running there stops until it's back.", "destructive"):
             return f"\n{names} still {verb} a reboot. Say 'reboot <name>' when it suits you."
         done = []
         for h in hosts:
@@ -478,7 +539,7 @@ class Assistant:
             return "\n".join(problems + [ok]) + tail
         tail = "".join(f"\n  {p}" for p in problems) + tail
         summary = "\n".join("  " + w[3] for w in work)
-        if not self.confirm(f"Install these updates?\n{summary}"):
+        if not self.allow(f"Install these updates?\n{summary}", doing=f"Installing updates:\n{summary}"):
             return "Okay, nothing was changed."
         lines, reboot_hosts = [], []
         for p, pkgs, ups, _ in work:
@@ -535,7 +596,7 @@ class Assistant:
         from . import housekeeping as hk
         from .audit import audit
         host = self._host_named(m["host"])
-        if not self.confirm(f"Restart container {m['c']} on {host['name']}?"):
+        if not self.allow(f"Restart container {m['c']} on {host['name']}?"):
             return "Okay, left it alone."
         try:
             name = hk.restart_container(host, m["c"])
@@ -548,8 +609,8 @@ class Assistant:
         from . import housekeeping as hk
         from .audit import audit
         host = self._host_named(m["host"])
-        if not self.confirm(f"Remove unused Docker images and build cache on {host['name']}? Containers and volumes "
-                            "aren't touched; an image is downloaded again if something needs it later."):
+        if not self.allow(f"Remove unused Docker images and build cache on {host['name']}? Containers and volumes "
+                          "aren't touched; an image is downloaded again if something needs it later.", "destructive"):
             return "Okay, nothing was removed."
         try:
             result = hk.docker_cleanup(host)
@@ -562,7 +623,7 @@ class Assistant:
         from . import housekeeping as hk
         from .audit import audit
         host = self._host_named(m["host"])
-        if not self.confirm(f"Reboot {host['name']} ({host['host']}) now?\n  WARNING: anything running there stops until it's back."):
+        if not self.allow(f"Reboot {host['name']} ({host['host']}) now?\n  WARNING: anything running there stops until it's back.", "destructive"):
             return "Okay, not rebooting."
         try:
             hk.reboot(host)
@@ -598,7 +659,7 @@ class Assistant:
         prov = self._provisioner()
         try:
             plan = prov.plan(m["name"], int(cores[1]) if cores else None, memory_mb, disk_gb)
-            if not self.confirm(prov.describe(plan)):
+            if not self.allow(prov.describe(plan), doing=f"Creating VM {m['name']}"):
                 return "Okay, nothing was created."
             result = prov.execute(plan, self.say)
         except ProvisionError as e:
@@ -629,6 +690,7 @@ class Assistant:
             libs = [l for l in libs if m["lib"].strip() in l.get("title", "").lower()]
             if not libs:
                 return f"I couldn't find a Plex library called '{m['lib']}'."
+        self.allow("Scan Plex libraries", "safe")
         for lib in libs:
             plex.refresh(lib["key"])
         return "Scanning " + ", ".join(l["title"] for l in libs) + "."
@@ -658,20 +720,35 @@ class Assistant:
         results = results[:5]
         if not results:
             return f"{arr.name} found nothing for '{m['q']}'."
-        pick = 0 if len(results) == 1 else self.choose([arr.label(r) + ("  (already in library)" if arr.in_library(r) else "") for r in results])
+        pick = 0 if len(results) == 1 else self._obvious_pick(results, m["q"], m["year"], arr)
+        if pick is None:
+            pick = self.choose([arr.label(r) + ("  (already in library)" if arr.in_library(r) else "") for r in results])
         if pick is None:
             return "Okay, cancelled."
         item = results[pick]
         if arr.in_library(item):
             return f"{arr.label(item)} is already in {arr.name}."
-        if not self.confirm(f"Add {arr.label(item)} to {arr.name} and start searching for it?"):
+        if not self.allow(f"Add {arr.label(item)} to {arr.name} and start searching for it?"):
             return "Okay, cancelled."
         arr.add(item)
         return f"Added {arr.label(item)}. {arr.name} is searching for it now."
 
+    def _obvious_pick(self, results: list, query: str, year, arr) -> int | None:
+        """Outside Ask mode, don't make the user pick when one result is clearly the one they meant."""
+        if self.mode == "ask":
+            return None
+        q = re.sub(r"[^a-z0-9]+", " ", str(query).lower()).strip()
+        exact = [i for i, r in enumerate(results)
+                 if re.sub(r"[^a-z0-9]+", " ", str(r.get("title") or r.get("artistName") or "").lower()).strip() == q
+                 and (not year or str(r.get("year")) == str(year))]
+        if len(exact) == 1:
+            self.say(f"Picked {arr.label(results[exact[0]])}, the exact match.")
+            return exact[0]
+        return None
+
     def search_missing(self, m) -> str:
         arr = self._arr(m["kind"])
-        if not self.confirm(f"Ask {arr.name} to search for everything missing? This can hit your indexers hard."):
+        if not self.allow(f"Ask {arr.name} to search for everything missing? This can hit your indexers hard."):
             return "Okay, cancelled."
         arr.search_missing()
         return f"{arr.name} is searching for missing {KINDS[m['kind']]}s."
@@ -700,7 +777,7 @@ class Assistant:
                 return f"There's no request {n}. I listed {len(self.last_requests)}."
             chosen = [self.last_requests[n - 1]]
         names = ", ".join(o.title_of(r) for r in chosen)
-        if not self.confirm(f"{'Approve' if approve else 'Decline'} {names}?"):
+        if not self.allow(f"{'Approve' if approve else 'Decline'} {names}?"):
             return "Okay, cancelled."
         for r in chosen:
             (o.approve if approve else o.decline)(r["id"])
@@ -722,6 +799,7 @@ class Assistant:
 
     def test_indexers(self, m) -> str:
         p = self._need("prowlarr", "Prowlarr")
+        self.allow("Test every Prowlarr indexer", "safe")
         names = {i["id"]: i.get("name") for i in p.indexers()}
         try:
             results = p.test_all()
@@ -733,6 +811,10 @@ class Assistant:
 
 class _NotSetUp(Exception):
     pass
+
+
+class Blocked(_NotSetUp):
+    """Read-only mode stopped an action."""
 
 
 class _Match:
@@ -755,7 +837,7 @@ class _Match:
 
 def chat(cfg: dict) -> None:
     jarvis = Assistant(cfg)
-    print("Jarvis here. Type 'help' for ideas, 'exit' to quit.")
+    print(f"Jarvis here. Type 'help' for ideas, 'exit' to quit.\nMode: {modes.MODES[jarvis.mode]}")
     while True:
         try:
             text = input("\nyou> ").strip()

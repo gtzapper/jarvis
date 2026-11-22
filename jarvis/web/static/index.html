@@ -69,6 +69,16 @@ h1 { font-size: 20px; margin: 0 0 4px; }
 .chips { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; }
 .chip { background: var(--panel); border: 1px solid var(--line); border-radius: 99px; padding: 4px 11px; cursor: pointer; font-size: 13px; }
 .chip:hover { border-color: var(--accent); }
+.modebar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 8px; }
+.modes { display: inline-flex; border: 1px solid var(--line); border-radius: 99px; padding: 2px; background: var(--panel); }
+.modes button { border: 0; background: none; padding: 4px 12px; border-radius: 99px; cursor: pointer; font-size: 13px; color: var(--muted); }
+.modes button.on { background: var(--accent); color: var(--accent-text); }
+.modehelp { color: var(--muted); font-size: 12px; }
+.msg .steps { color: var(--muted); font-size: 13px; margin: 0; padding: 0; list-style: none; }
+.msg .steps li { padding: 1px 0 1px 14px; position: relative; }
+.msg .steps li::before { content: "•"; position: absolute; left: 2px; }
+.msg .steps li.sub { padding-left: 24px; } .msg .steps li.sub::before { content: ""; }
+.msg .warn { color: var(--crit); font-weight: 600; }
 .composer { display: flex; gap: 8px; }
 .composer input { flex: 1; padding: 11px 13px; border-radius: 10px; border: 1px solid var(--line); background: var(--panel); }
 /* tables & forms */
@@ -131,6 +141,10 @@ select.select, input[type=text], input[type=password], input[type=number], input
       <div class="chat">
         <div class="msgs" id="msgs"></div>
         <div class="chips" id="chips"></div>
+        <div class="modebar">
+          <div class="modes" id="modes" role="radiogroup" aria-label="Permission mode"></div>
+          <span class="modehelp" id="modehelp"></span>
+        </div>
         <form class="composer" id="composer">
           <input id="input" autocomplete="off" placeholder="Ask Jarvis anything, e.g. why is Plex buffering? / grab the new Dune movie / is the NAS ok?">
           <button class="btn primary">Send</button>
@@ -240,13 +254,14 @@ async function send(text) {
 function follow(job, b) {
   const render = () => {
     const parts = [];
-    if (job.progress.length) parts.push(el("div", { class: "progress" }, job.progress.join("\n")));
+    if (job.progress.length) parts.push(el("ul", { class: "steps" }, job.progress.map(p => el("li", { class: p.startsWith("  ") ? "sub" : "" }, p.trim()))));
     if (job.status === "running") parts.push(el("div", { class: "progress" }, job.progress.length ? "working..." : "..."));
     if (job.status === "done") parts.push(el("div", {}, job.reply));
     if (job.status === "input" && job.prompt) {
       const answer = async a => { b.querySelectorAll("button").forEach(x => x.disabled = true); job = await api(`/api/chat/${job.id}/answer`, { answer: a }); render(); poll(); };
       if (job.prompt.type === "confirm") {
-        parts.push(el("div", {}, job.prompt.question),
+        const risky = job.prompt.question.startsWith("[destructive] ");
+        parts.push(risky ? el("div", { class: "warn" }, "Destructive, so I always ask:") : null, el("div", {}, job.prompt.question.replace(/^\[destructive\] /, "")),
           el("div", { class: "row", style: "margin-top:10px" }, el("button", { class: "btn primary", onclick: () => answer(true) }, "Yes, do it"), el("button", { class: "btn", onclick: () => answer(false) }, "No")));
       } else {
         parts.push(el("div", {}, "Which one?"),
@@ -258,11 +273,20 @@ function follow(job, b) {
   };
   const poll = async () => {
     while (job.status === "running") { await new Promise(r => setTimeout(r, 800)); job = await api(`/api/chat/${job.id}`); render(); }
+    if (job.status === "done") loadMode();  // "auto mode" typed in chat
   };
   render(); poll();
 }
 $("#composer").onsubmit = e => { e.preventDefault(); const t = $("#input").value; $("#input").value = ""; send(t); };
-bubble("jarvis", "Hi. Ask me anything from the list, or tap a suggestion below. Anything that changes something asks you first.");
+bubble("jarvis", "Hi. Tell me what you want done and I'll work out the steps, showing you what I'm doing as I go. Destructive things always ask you first.");
+const MODE_LABELS = { ask: "Ask", auto: "Auto", "read-only": "Read-only" };
+async function loadMode(set) {
+  const d = await api("/api/mode", set ? { mode: set } : undefined);
+  if (d.error) return;
+  put($("#modes"), Object.keys(MODE_LABELS).map(m => el("button", { type: "button", role: "radio", "aria-checked": String(m === d.mode), class: m === d.mode ? "on" : "", title: d.modes[m], onclick: () => loadMode(m) }, MODE_LABELS[m])));
+  $("#modehelp").textContent = d.description.replace(/^[^:]+: /, "") + (d.mode === "ask" ? " Destructive actions always ask, in every mode." : "");
+}
+loadMode();
 
 /* ---------- devices ---------- */
 let devs = [];

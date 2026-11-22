@@ -247,6 +247,19 @@ def create_app(state: State, password: str | None) -> Flask:
                 state.assistant.brain.reset()
         return jsonify(ok=True)
 
+    @app.route("/api/mode", methods=["GET", "POST"])
+    def mode():
+        from .. import modes
+        from ..audit import audit
+        if request.method == "POST":
+            try:
+                new = modes.set_mode((request.json or {}).get("mode", ""))
+            except ValueError as e:
+                return jsonify(error=str(e)), 400
+            audit(f"mode set to {new} (dashboard)")
+        current = modes.get(state.cfg)
+        return jsonify(mode=current, description=modes.MODES[current], modes=modes.MODES)
+
     @app.get("/api/ai")
     def ai_info():
         b = state.assistant.brain

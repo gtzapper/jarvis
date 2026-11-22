@@ -205,14 +205,20 @@ python -m jarvis do "what's downloading"   # one-shot
 | `refresh plex tv` | Scan a Plex library (or all of them) |
 | `indexers` / `test indexers` | Prowlarr indexer health |
 
-Anything that changes something asks you to confirm first. `do --yes` skips the question and takes the top match, which is handy for scripts. Free-form English ("grab that new dune movie") comes with the AI brain stage, which will call these same commands.
+What asks first depends on the permission mode (see below). `do --yes` skips the question and takes the top match, which is handy for scripts. Free-form English ("grab that new dune movie") comes with the AI brain stage, which will call these same commands.
 
 ## AI brain (talk in plain English)
 With the AI brain set up, Jarvis understands normal sentences and works out which of its tools to use:
 ```
-you> why is web1 complaining about disk?
-     Running the command...   [asks: Run on web1: df -h ? -> Yes]
-jarvis> web1's root disk is 94% full (2 GB left). Want me to look for big files?
+you> free up some space on docker-vm
+     • Checking what's using the disk on docker-vm.
+     • Running on docker-vm: ncdu -o- /
+         docker-vm: exit 127: ncdu: not found
+     • ncdu isn't installed, so I'll use du instead.
+     • Running on docker-vm: du -sh /var/* | sort -h | tail
+     • Docker images are the big one. Clearing unused ones.
+       [Destructive, so I always ask: Remove unused Docker images...? -> Yes]
+jarvis> Freed 9 GB on docker-vm: Docker images were taking 12 GB, so I cleaned the unused ones.
 
 you> something's stuck in sonarr, sort it out
 you> grab the 2021 dune and the new severance season
@@ -222,12 +228,26 @@ you> slow the downloads down, I'm gaming
 **Setup:** create an API key at console.anthropic.com → API Keys, then paste it into Setup → **AI brain (Claude)** and click Save & test. It's stored in `.env` as `ANTHROPIC_API_KEY`.
 
 **How it behaves:**
-- **Exact commands skip the AI.** Commands like `downloads` or `status` still run instantly, at no cost. Anything else goes to the AI.
-- **Changes still need your yes.** The AI uses the same commands you do, so adding media, removing downloads, running commands and creating VMs all still ask you to confirm and are written to the audit log. The AI can't skip that step.
+- **You say what you want; it does the steps.** It works out the commands itself, looks before it changes things, and checks the result afterwards.
+- **It recovers from failures.** If a command fails (not installed, permission denied, wrong container name), it reads the error and tries another way, up to 3 different attempts, before telling you what's still wrong.
+- **It narrates as it goes.** Each step appears live in the chat ("Checking the logs for sonarr..."), including why a step failed.
+- **Everything goes through the AI** when it's set up, using the same commands you can type. `help`, `new chat` and the mode commands still answer instantly. If the AI can't be reached, exact commands like `downloads` still work the old way.
+- **The permission mode decides what asks first** (see below). The AI can't skip that gate, and everything is written to the audit log.
 - **It remembers the conversation.** "Remove that one" works. Say `new chat` (or tap it) to start fresh.
 - **Data stays data.** Text from your systems (torrent names, logs, command output) is treated as information. Instructions hidden inside it are ignored.
 
 **Cost:** you pay Anthropic per use. A typical question with a couple of tool calls costs a few cents. To make it cheaper, set Effort to `low` in Setup. Model `claude-opus-5-5` is the default. The dashboard's `/api/ai` endpoint shows token usage since start.
+
+## Permission modes (Ask, Auto, Read-only)
+Like Claude Code, Jarvis has modes for how much it may do without asking. Switch them with the pill above the chat box, or type `ask mode`, `auto mode` or `read-only mode` (`mode` shows the current one).
+
+| Mode | Looking (status, `df -h`, `docker ps`, logs) | Everyday changes (restart a container, add a movie, install updates, `systemctl restart`) | Destructive (reboot, delete, Docker cleanup, remove a download, `rm`, `docker rm`, `systemctl stop`) |
+|---|---|---|---|
+| **Auto** (default) | just runs | just runs, and says it did | **always asks** |
+| **Ask** | asks | asks | **always asks** |
+| **Read-only** | just runs | blocked; it tells you what it would do | blocked |
+
+Destructive actions ask in every mode, and the prompt is marked "Destructive, so I always ask". Shell commands are sorted automatically: known read-only commands count as looking; anything that deletes, overwrites (`>` to a file, `sed -i`, `mv`), stops, kills, wipes or pipes into a shell counts as destructive; everything else is an everyday change. Auto-approved and blocked actions are written to `data/audit.log` too. The mode is saved in `data/mode.json`, so it survives restarts.
 
 ## Offline AI (local model with Ollama)
 The same brain and the same tools can run on a local model instead of Claude. Nothing leaves your network, it works with the internet down, and there's no per-use cost. The trade-off: local models are less capable. Expect them to handle everyday requests well ("what's downloading", "who's watching", "pause the torrents"), but they make more mistakes on multi-step jobs.
@@ -321,7 +341,7 @@ you> run df -h on docker-vm
 you> on web1: sudo apt update && sudo apt upgrade -y
 you> hosts
 ```
-Jarvis always shows you the exact command and host and waits for a yes. Commands that look destructive (`rm -rf`, `reboot`, `mkfs`, `docker rm`, `systemctl stop` and similar) get an extra warning. Output is trimmed to the last 40 lines. Every command, including the ones you decline, is written to `data/audit.log`.
+In Ask mode Jarvis shows you the exact command and host and waits for a yes. In Auto mode, read-only and everyday commands just run, and you see each one in the chat. Commands that look destructive (`rm`, `reboot`, `mkfs`, `docker rm`, `systemctl stop` and similar) always ask, with a warning. Output is trimmed to the last 40 lines. Every command, including the ones you decline, is written to `data/audit.log`.
 
 ## Creating VMs (with a static IP on pfSense)
 ```

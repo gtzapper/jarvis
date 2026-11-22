@@ -7,21 +7,24 @@ from typing import Callable
 
 import requests
 
-from .brain import MAX_STEPS, MAX_TURNS, PROGRESS, SYSTEM, TOOLS, Brain
+from .brain import MAX_STEPS, MAX_TURNS, TOOLS, Brain, describe, outcome, system_prompt
 
 DEFAULT_MODEL = "qwen3:8b"
 DEFAULT_URL = "http://localhost:11434"
 DEFAULT_CTX = 32768   # Ollama's own default (4k on smaller GPUs) is too small to hold Jarvis's tool list
 
-LOCAL_SYSTEM = SYSTEM + """
-
-Tool calls: use only the tools provided, with exactly the parameters in their schema. Use null for optional values you don't know. \
-Never invent results: if you didn't call a tool, you don't know the answer."""
-
 OLLAMA_TOOLS = [{"type": "function", "function": {"name": t["name"], "description": t["description"], "parameters": t["input_schema"]}}
                 for t in TOOLS]
 SCHEMAS = {t["name"]: t["input_schema"] for t in TOOLS}
 THINK_TAGS = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
+
+
+def _plain(text: str | None) -> str:
+    """Local models often ignore 'no markdown': strip think tags, bold and headings so the chat stays readable."""
+    text = THINK_TAGS.sub("", text or "")
+    text = re.sub(r"\*\*(.+?)\*\*", r"\1", text)
+    text = re.sub(r"(?m)^#{1,6}\s+", "", text)
+    return text.strip()
 
 
 class OllamaError(Exception):
@@ -79,9 +82,10 @@ class OllamaBrain(Brain):
         self.think = {"off": False, "on": True, False: False, True: True}.get(ai.get("think"))
         self.messages: list = []
         self.usage = {"input": 0, "output": 0, "cache_read": 0}
+        self.unreachable = False
 
     def _chat(self, messages: list, tools: bool = True) -> dict:
-        body = {"model": self.model, "messages": [{"role": "system", "content": LOCAL_SYSTEM}] + messages,
+        body = {"model": self.model, "messages": [{"role": "system", "content": system_prompt(self.cfg, local=True)}] + messages,
                 "stream": False, "keep_alive": self.keep_alive,
                 "options": {"num_ctx": self.num_ctx, "temperature": 0.2}}
         if tools:
@@ -112,8 +116,11 @@ class OllamaBrain(Brain):
             say("(Started a fresh conversation to keep things quick.)")
         checkpoint = len(self.messages)
         self.messages.append({"role": "user", "content": text})
+        self.unreachable = True
         try:
-            return self._local_loop(say)
+            reply = self._local_loop(say)
+            self.unreachable = False
+            return reply
         except OllamaError as e:
             self.messages = self.messages[:checkpoint]
             return str(e)
@@ -122,7 +129,7 @@ class OllamaBrain(Brain):
         for _ in range(MAX_STEPS):
             data = self._chat(self.messages)
             msg = data.get("message") or {}
-            content = THINK_TAGS.sub("", msg.get("content") or "").strip()
+            content = _plain(msg.get("content"))
             calls = msg.get("tool_calls") or []
             entry = {"role": "assistant", "content": msg.get("content") or ""}
             if calls:
@@ -141,14 +148,19 @@ class OllamaBrain(Brain):
                 if problem:
                     result = f"Error: {problem}"
                 else:
-                    say(PROGRESS.get(name, name) + "...")
+                    line = describe(name, args)
+                    if line:
+                        say(line)
                     result, is_error = self.execute(name, args)
+                    note = outcome(name, result, is_error)
+                    if note:
+                        say(note)
                     if is_error:
                         result = f"Error: {result}"
                 self.messages.append({"role": "tool", "tool_name": name, "content": result})
         self.messages.append({"role": "user", "content": "Stop using tools now and tell me where things stand."})
         data = self._chat(self.messages, tools=False)
-        final = THINK_TAGS.sub("", (data.get("message") or {}).get("content") or "").strip()
+        final = _plain((data.get("message") or {}).get("content"))
         self.messages.append({"role": "assistant", "content": final})
         return final or "I ran out of steps on that one."
 
