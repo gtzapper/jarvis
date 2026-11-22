@@ -269,6 +269,29 @@ The link is private: anyone who has it can read your calendar. **New link** repl
 
 Everything is stored in `data/organizer.db` on the Jarvis host.
 
+## Lists, memory, habits and weather
+```
+add milk, eggs and bread to the shopping list     (shopping list / got milk / clear done items)
+add call the plumber to my todo list               (any name works: "add passport to the packing list")
+remember that the guest wifi password is on the fridge     (what do you remember / forget wifi)
+add habit take meds at 21:00                        (add habit stretch at 7am on weekdays / done meds / habits)
+weather / weather tomorrow / will it rain
+```
+- **Lists** are in the dashboard (Planner → Lists) and the app (Planner → Lists). Tick things off there or by voice.
+- **Memory:** facts you ask Jarvis to remember are given to the AI in every conversation, so it can use them. They're stored as facts from you, not as instructions. Planner → "What Jarvis remembers" shows them, and you can forget any of them.
+- **Habits:** Jarvis checks in at the time you pick, through your reminder channels. If it's still not done, there's one nudge 3 hours later (by 22:00 for evening habits). Streaks are kept, and the daily report says how yesterday went.
+- **Weather and commute** (Setup → Weather & commute, using Open-Meteo, free and with no account): the forecast with a rain warning goes in the daily report and on the Dashboard. On weekdays the report also includes a typical drive time to work (no live traffic).
+
+## Backup watchdog and expiry warnings
+- **Backups** (on when Proxmox or Unraid is set up; Setup → Backup watchdog):
+  - Every Proxmox guest in a backup job must have a backup newer than 30 hours (configurable).
+  - Failed backup jobs are reported.
+  - Running guests that aren't in any backup job are listed.
+  - ZFS pools on Proxmox nodes must be scrubbed regularly and without errors.
+  - Unraid parity checks must run regularly and without errors.
+  - It all appears on the Dashboard and alerts like any other problem.
+- **Certificates & domains** (Setup → Certificates & domains): list your HTTPS services (self-signed certificates work too) and domains. Jarvis warns 21 days before they expire, and again at 7 days.
+
 ## Email screening
 Jarvis checks your inboxes every 15 minutes, and your **local AI** sorts each new message: important, personal, bill, newsletter, promotion, notification or spam. It also writes a one-line summary and picks out bills (payee, amount, due date).
 

@@ -1,5 +1,7 @@
 from ..media.clients import MediaStack
 from ..models import Report
+from .backups import BackupCollector, UnraidParityCollector
+from .expiry import ExpiryCollector
 from .media import MediaCollector
 from .pfsense import PfSenseCollector
 from .proxmox import ProxmoxCollector
@@ -32,6 +34,13 @@ def build_collectors(cfg: dict, stack: MediaStack | None = None) -> list:
     collectors += [_make(PfSenseCollector, c, th, "pfsense") for c in cfg.get("pfsense") or []]
     collectors += [_make(SSHCollector, c, th, "unraid", kind="unraid") for c in cfg.get("unraid") or []]
     collectors += [_make(SSHCollector, c, th, "linux", kind="linux") for c in cfg.get("linux_hosts") or []]
+    watch = cfg.get("backup_watch") or {}
+    if watch.get("enabled", True):
+        collectors += [_make(BackupCollector, c, th, "backups", watch=watch) for c in cfg.get("proxmox") or []]
+        collectors += [_make(UnraidParityCollector, c, th, "parity", watch=watch) for c in cfg.get("unraid") or []]
+    exp = cfg.get("expiry_watch") or {}
+    if exp.get("hosts") or exp.get("domains"):
+        collectors.append(ExpiryCollector(exp, th))
     stack = stack if stack is not None else MediaStack(cfg)
     if stack:
         collectors.append(MediaCollector(stack, th))

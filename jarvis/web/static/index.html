@@ -230,6 +230,7 @@ select.select, input[type=text], input[type=password], input[type=number], input
     <section id="dashboard">
       <h1>Dashboard</h1>
       <p class="sub" id="updated">Loading...</p>
+      <p class="sub" id="weatherline" hidden></p>
       <div class="card summary">
         <div class="text" id="summary"></div>
         <div class="row" id="counts"></div>
@@ -267,6 +268,7 @@ select.select, input[type=text], input[type=password], input[type=number], input
           <div class="card" id="upcomingcard" style="margin-top:12px"></div>
         </div>
         <div>
+          <div class="card" id="listscard" style="margin-bottom:12px"></div>
           <div class="card" id="mailcard" style="margin-bottom:12px"></div>
           <div class="card" id="notescard"></div>
           <div class="card" id="feedcard" style="margin-top:12px"></div>
@@ -363,7 +365,19 @@ function systemCard(r) {
     (r.events || []).map(e => el("div", { class: "prob warning" }, e)),
     pre, more);
 }
+let weatherAt = 0;
+async function loadWeather() {
+  if (Date.now() - weatherAt < 15 * 60e3) return;
+  weatherAt = Date.now();
+  try {
+    const w = await api("/api/weather");
+    const line = $("#weatherline");
+    line.hidden = !w.ok;
+    if (w.ok) line.textContent = w.today;
+  } catch {}
+}
 async function loadStatus() {
+  loadWeather();
   const s = await api("/api/status");
   $("#updated").textContent = s.updated ? `Last checked ${s.updated}. Updates automatically.` : (s.configured ? "First check running..." : "");
   $("#summary").textContent = s.summary;
@@ -575,10 +589,13 @@ const SVC_META = {
   email_ai: ["@AI", "#fb7185", "Which local model reads your email (never a cloud AI)"],
   voice: ["Mic", "#a855f7", "Hey Jarvis: speech-to-text and voice for listening devices"],
   planner: ["Pl", "#22c55e", "How reminders, bills and the daily report reach you"],
+  location: ["Wx", "#0ea5e9", "Weather and commute time for the daily report"],
+  backup_watch: ["Bk", "#84cc16", "Recent Proxmox backups, ZFS scrubs and Unraid parity checks"],
+  expiry_watch: ["Exp", "#eab308", "Warnings before certificates and domains expire"],
   updates: ["Up", "#94a3b8", "GitHub token, only needed for a private repo"],
   web: ["Wb", "#60a5fa", "Dashboard password and who can open it"],
 };
-const GROUP_ORDER = ["Infrastructure", "Media", "Downloads", "AI & automation", "Email", "Alerts", "Jarvis"];
+const GROUP_ORDER = ["Infrastructure", "Media", "Downloads", "AI & automation", "Email", "Planner", "Alerts", "Jarvis"];
 let setupData = null, setupTab = "All", openSvc = null;
 
 function svcIcon(id, cls = "ico") {
@@ -761,7 +778,7 @@ const isoDay = d => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDa
 async function loadPlanner() {
   plan = await api("/api/planner?days=120");
   if (!planMonth) { const t = new Date(); planMonth = new Date(t.getFullYear(), t.getMonth(), 1); }
-  renderQuickAdd(); renderMonth(); renderUpcoming(); renderNotes(); renderFeed(); loadMail();
+  renderQuickAdd(); renderMonth(); renderUpcoming(); renderNotes(); renderFeed(); loadMail(); loadLife();
 }
 async function planPost(path, body) {
   const r = await api(path, body || {});
@@ -848,6 +865,42 @@ function renderNotes() {
   search.oninput = draw;
   put(card, el("strong", {}, `Notes (${plan.notes.length})`), el("div", { style: "margin:8px 0" }, search), listBox);
   draw();
+}
+let lifeList = "shopping";
+async function loadLife() {
+  const card = $("#listscard");
+  const d = await api("/api/life");
+  const names = [...new Set(["shopping", "todo", ...Object.keys(d.lists)])];
+  const its = d.items.filter(i => i.list === lifeList);
+  const input = el("input", { type: "text", placeholder: `Add to ${lifeList}...`, style: "flex:1" });
+  const add = async () => { if (!input.value.trim()) return; await api("/api/life/item", { list: lifeList, text: input.value }); input.value = ""; loadLife(); };
+  input.onkeydown = e => { if (e.key === "Enter") add(); };
+  const act = async (path) => { await api(path, {}); loadLife(); };
+  const done = its.filter(i => i.done).length;
+  const habitName = el("input", { type: "text", placeholder: "New habit, e.g. take meds", style: "flex:1" });
+  const habitTime = el("input", { type: "time", value: "21:00", style: "flex:0 1 110px" });
+  const habitDays = el("select", { class: "select", style: "flex:0 1 120px" }, ["daily", "weekdays", "weekends"].map(x => el("option", { value: x }, x)));
+  put(card,
+    el("div", { class: "row", style: "justify-content:space-between" }, el("strong", {}, "Lists"),
+      el("div", { class: "tabs" }, names.map(n => el("button", { type: "button", class: n === lifeList ? "on" : "", onclick: () => { lifeList = n; loadLife(); } },
+        n + (d.lists[n] ? ` (${d.lists[n]})` : ""))))),
+    el("div", { class: "row", style: "margin:10px 0 4px" }, input, el("button", { class: "btn primary", onclick: add }, "Add")),
+    its.length ? its.map(i => el("div", { class: "item" },
+      el("input", { type: "checkbox", checked: !!i.done, onchange: () => act(`/api/life/item/${i.id}/${i.done ? "uncheck" : "check"}`) }),
+      el("div", { class: "grow", style: i.done ? "text-decoration:line-through;color:var(--muted)" : "" }, i.text),
+      el("div", { class: "acts" }, el("button", { class: "btn", title: "Remove", onclick: () => act(`/api/life/item/${i.id}/delete`) }, "×")))) : el("p", { class: "help" }, `The ${lifeList} list is empty.`),
+    done ? el("button", { class: "more", onclick: async () => { await api("/api/life/clear", { list: lifeList }); loadLife(); } }, `Clear ${done} ticked off`) : null,
+    el("div", { class: "day-head", style: "margin-top:16px" }, "Habits"),
+    d.habits.length ? d.habits.map(h => el("div", { class: "item" },
+      el("span", { class: "dot " + (h.done_today ? "k-reminder" : h.due_today ? "k-bill" : "") , style: h.due_today || h.done_today ? "" : "background:var(--line)" }),
+      el("div", { class: "grow" }, el("div", {}, h.name), el("div", { class: "when" }, `${h.time} · ${h.days}` + (h.streak > 1 ? ` · ${h.streak}-day streak` : ""))),
+      el("div", { class: "acts" }, h.due_today && !h.done_today ? el("button", { class: "btn primary", onclick: () => act(`/api/life/habit/${h.id}/done`) }, "Done") : h.done_today ? el("span", { class: "pill ok" }, "done") : null,
+        el("button", { class: "btn", title: "Stop tracking", onclick: () => confirm(`Stop tracking "${h.name}"?`) && act(`/api/life/habit/${h.id}/delete`) }, "×")))) : el("p", { class: "help" }, "No habits yet. Jarvis checks in at the time you pick."),
+    el("div", { class: "row", style: "margin-top:8px" }, habitName, habitTime, habitDays,
+      el("button", { class: "btn", onclick: async () => { if (!habitName.value.trim()) return; const r = await api("/api/life/habit", { name: habitName.value, time: habitTime.value, days: habitDays.value }); if (!r.ok) alert(r.error); loadLife(); } }, "Add habit")),
+    d.memories.length ? el("details", { style: "margin-top:14px" }, el("summary", { class: "help", style: "cursor:pointer" }, `What Jarvis remembers about you (${d.memories.length})`),
+      d.memories.map(m => el("div", { class: "item" }, el("div", { class: "grow" }, m.text),
+        el("div", { class: "acts" }, el("button", { class: "btn", title: "Forget", onclick: () => act(`/api/life/memory/${m.id}/delete`) }, "Forget"))))) : null);
 }
 async function loadMail() {
   const card = $("#mailcard");

@@ -62,7 +62,13 @@ def system_prompt(cfg: dict, local: bool = False) -> str:
     from datetime import datetime
     from . import modes
     now = datetime.now()
+    from .life import memory_prompt
+    try:
+        memory = memory_prompt()
+    except Exception:
+        memory = ""
     return (SYSTEM + ("\n\n" + LOCAL_EXTRA if local else "") + "\n\n" + MODE_NOTES[modes.get(cfg)] +
+            ("\n\n" + memory if memory else "") +
             f"\n\nCurrent local date and time: {now:%A %Y-%m-%d %H:%M}. Use it to turn 'tomorrow', 'next Friday' or "
             "'in 2 hours' into exact dates for reminders and the calendar.")
 
@@ -178,6 +184,23 @@ TOOLS = [
     {"name": "add_email_bill_to_calendar", "description": "Add a bill found in an email (id from email_summary) to the calendar. Only when "
      "the user asks for it. due_date overrides the found date (YYYY-MM-DD) or null.",
      "input_schema": _schema({"mail_id": {"type": "integer"}, "due_date": {"type": ["string", "null"]}})},
+    {"name": "add_to_list", "description": "Add items to a list: 'shopping', 'todo', or any named list (e.g. 'packing').",
+     "input_schema": _schema({"list": {"type": "string"}, "items": {"type": "array", "items": {"type": "string"}}})},
+    {"name": "show_list", "description": "What's on a list (or all lists if list is null).",
+     "input_schema": _schema({"list": {"type": ["string", "null"]}})},
+    {"name": "check_off", "description": "Tick an item off a list (it was bought or done).",
+     "input_schema": _schema({"list": {"type": ["string", "null"]}, "item": {"type": "string"}})},
+    {"name": "remember", "description": "Remember a lasting fact about the user or their home, for future conversations. Only when they ask "
+     "you to remember something, or clearly state a lasting personal fact or preference. Tell them you saved it.",
+     "input_schema": _schema({"fact": {"type": "string"}})},
+    {"name": "forget", "description": "Forget remembered facts that contain these words (or a memory id).",
+     "input_schema": _schema({"what": {"type": "string"}})},
+    {"name": "add_habit", "description": "Track a habit with a daily check-in at a time (HH:MM). days: daily, weekdays or weekends.",
+     "input_schema": _schema({"name": {"type": "string"}, "time": {"type": "string"}, "days": {"type": "string", "enum": ["daily", "weekdays", "weekends"]}})},
+    {"name": "habit_done", "description": "Mark a habit done for today.", "input_schema": _schema({"habit": {"type": "string"}})},
+    {"name": "habits", "description": "The user's habits, whether each is done today, and streaks.", "input_schema": _schema({})},
+    {"name": "weather", "description": "Weather at the user's home location: day 0 = today, 1 = tomorrow, up to 3.",
+     "input_schema": _schema({"day": {"type": "integer"}})},
     {"name": "discover_media", "description": "Find media apps (Plex, Sonarr, Radarr, Lidarr, Prowlarr, Overseerr, qBittorrent, Deluge, "
      "SABnzbd) running in Docker on Unraid and VMs, or installed in Proxmox VMs/LXCs, and whether each is already in Jarvis. "
      "Changes nothing; the user adds them in Setup.", "input_schema": _schema({})},
@@ -195,6 +218,9 @@ PROGRESS = {
     "list_hosts": "Listing hosts", "run_command": "Running the command", "list_devices": "Asking pfSense", "create_vm": "Creating the VM",
     "check_vm_setup": "Checking the VM setup", "discover_media": "Looking for media apps",
     "email_summary": "Checking your email", "add_email_bill_to_calendar": "Adding the bill to the calendar",
+    "add_to_list": "Adding to the list", "show_list": "Checking the list", "check_off": "Ticking it off", "remember": "Remembering that",
+    "forget": "Forgetting that", "add_habit": "Setting up the habit", "habit_done": "Marking it done", "habits": "Checking your habits",
+    "weather": "Checking the weather",
     "add_reminder": "Setting a reminder", "list_reminders": "Checking your reminders", "cancel_reminder": "Cancelling the reminder",
     "add_note": "Saving the note", "search_notes": "Searching your notes", "add_calendar_item": "Adding it to the calendar",
     "agenda": "Checking your calendar", "mark_bill_paid": "Marking it paid", "daily_report": "Putting your report together", "check_updates": "Checking for updates", "install_updates": "Preparing updates",
@@ -364,6 +390,15 @@ class Brain:
             "run_command": lambda: j.run(g(host=a["host"], cmd=a["command"])),
             "check_vm_setup": lambda: j.check_vm_setup(g()),
             "discover_media": lambda: j.discover_media(g()),
+            "add_to_list": lambda: j.list_add_items(a["list"], a["items"]),
+            "show_list": lambda: j.show_list(g(name=a.get("list"))),
+            "check_off": lambda: j.list_check(a.get("list"), a["item"]),
+            "remember": lambda: j.remember_fact(a["fact"]),
+            "forget": lambda: j.forget_fact(a["what"]),
+            "add_habit": lambda: j.habit_add(a["name"], a["time"], a["days"]),
+            "habit_done": lambda: j.habit_done(g(name=a["habit"])),
+            "habits": lambda: j.habit_list(g()),
+            "weather": lambda: j.weather(g(day=a["day"])),
             "email_summary": lambda: j.email_summary(g(hours=max(1, min(int(a["hours"]), 720)))),
             "add_email_bill_to_calendar": lambda: self._email_bill(a),
             "add_reminder": lambda: self._add_reminder(a),

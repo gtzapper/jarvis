@@ -455,8 +455,8 @@ fun PlannerScreen(vm: JarvisViewModel) {
         item { PhoneCalendarRow(vm) }
         item {
             SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
-                listOf("upcoming" to "Coming up", "mail" to "Mail", "notes" to "Notes").forEachIndexed { i, (key, label) ->
-                    SegmentedButton(selected = section == key, onClick = { section = key }, shape = SegmentedButtonDefaults.itemShape(i, 3)) { Text(label) }
+                listOf("upcoming" to "Coming up", "lists" to "Lists", "mail" to "Mail", "notes" to "Notes").forEachIndexed { i, (key, label) ->
+                    SegmentedButton(selected = section == key, onClick = { section = key }, shape = SegmentedButtonDefaults.itemShape(i, 4)) { Text(label, fontSize = 13.sp, maxLines = 1) }
                 }
             }
         }
@@ -464,7 +464,9 @@ fun PlannerScreen(vm: JarvisViewModel) {
             item { Text("Loading...", color = c.onSurfaceVariant) }
             return@LazyColumn
         }
-        if (section == "mail") {
+        if (section == "lists") {
+            listItems(vm)
+        } else if (section == "mail") {
             mailItems(vm)
         } else if (showNotes) {
             val notes = p.optJSONArray("notes")
@@ -518,6 +520,64 @@ fun PhoneCalendarRow(vm: JarvisViewModel) {
             else if (PhoneCalendar.allowed(context)) vm.usePhoneCalendar(true)
             else ask.launch(arrayOf(Manifest.permission.READ_CALENDAR, Manifest.permission.WRITE_CALENDAR))
         })
+    }
+}
+
+private fun androidx.compose.foundation.lazy.LazyListScope.listItems(vm: JarvisViewModel) {
+    val d = vm.life
+    if (d == null) { item { Text("Loading...") }; return }
+    val all = d.optJSONArray("items")?.let { a -> (0 until a.length()).map { a.getJSONObject(it) } } ?: emptyList()
+    val byList = all.groupBy { it.optString("list") }
+    val names = (listOf("shopping", "todo") + byList.keys).distinct()
+    item { Text("Add things by telling Jarvis: \"add milk and eggs to the shopping list\".", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+    for (name in names) {
+        val its = byList[name].orEmpty()
+        item {
+            var text by remember(name) { mutableStateOf("") }
+            Column(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surface, RoundedCornerShape(12.dp))
+                .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(12.dp)).padding(12.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(name.replaceFirstChar { it.uppercase() }, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                    if (its.any { it.optInt("done") == 1 }) TextButton({ vm.lifeAction("/api/life/clear", JSONObject().put("list", name)) }) { Text("Clear ticked") }
+                }
+                its.forEach { it ->
+                    val done = it.optInt("done") == 1
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        androidx.compose.material3.Checkbox(done, { _ -> vm.lifeAction("/api/life/item/${it.optInt("id")}/${if (done) "uncheck" else "check"}") })
+                        Text(it.optString("text"), modifier = Modifier.weight(1f), fontSize = 15.sp,
+                            color = if (done) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface,
+                            textDecoration = if (done) androidx.compose.ui.text.style.TextDecoration.LineThrough else null)
+                    }
+                }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    OutlinedTextField(text, { text = it }, placeholder = { Text("Add to $name") }, singleLine = true, modifier = Modifier.weight(1f),
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                        keyboardActions = KeyboardActions(onDone = { if (text.isNotBlank()) { vm.lifeAction("/api/life/item", JSONObject().put("list", name).put("text", text)); text = "" } }))
+                    TextButton({ if (text.isNotBlank()) { vm.lifeAction("/api/life/item", JSONObject().put("list", name).put("text", text)); text = "" } }) { Text("Add") }
+                }
+            }
+        }
+    }
+    val habits = d.optJSONArray("habits")?.let { a -> (0 until a.length()).map { a.getJSONObject(it) } } ?: emptyList()
+    item { Text("HABITS", fontSize = 12.sp, letterSpacing = 0.5.sp, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.padding(top = 8.dp)) }
+    if (habits.isEmpty()) item { Text("No habits yet. Tell Jarvis: \"add habit take meds at 21:00\".", fontSize = 14.sp) }
+    items(habits) { h ->
+        Row(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surface, RoundedCornerShape(12.dp))
+            .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(12.dp)).padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text(h.optString("name"), fontSize = 15.sp)
+                val streak = h.optInt("streak")
+                Text("${h.optString("time")} · ${h.optString("days")}" + if (streak > 1) " · $streak-day streak" else "", fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            when {
+                h.optBoolean("done_today") -> Text("done", color = Color(0xFF22C55E), fontWeight = FontWeight.SemiBold)
+                h.optBoolean("due_today") -> Button({ vm.lifeAction("/api/life/habit/${h.optInt("id")}/done") }) { Text("Done") }
+                else -> Text("not today", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
     }
 }
 

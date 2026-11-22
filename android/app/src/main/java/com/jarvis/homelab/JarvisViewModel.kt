@@ -193,6 +193,15 @@ class JarvisViewModel(app: Application) : AndroidViewModel(app) {
     fun loadPlanner() = viewModelScope.launch {
         io { api.get("/api/planner?days=31") }?.let { planner = it }
         io { api.get("/api/mail?hours=72") }?.let { mail = it }
+        io { api.get("/api/life") }?.let { life = it }
+    }
+
+    var life by mutableStateOf<JSONObject?>(null)
+        private set
+
+    fun lifeAction(path: String, body: JSONObject = JSONObject()) = viewModelScope.launch {
+        io { api.post(path, body) }
+        io { api.get("/api/life") }?.let { life = it }
     }
 
     var mail by mutableStateOf<JSONObject?>(null)

@@ -96,11 +96,18 @@ class State:
         reports = mon.reports
         summary = spoken_summary(reports) if reports else None
         alerts = [m for _, m in (mon.events or [])[:10]]
-        from .. import mail
-        try:
-            extra = mail.report_lines(24)
-        except Exception:
-            extra = []
+        from .. import life, mail, weather
+        with self.lock:
+            cfg = self.cfg
+        extra = []
+        for part in (lambda: weather.report_lines(cfg), lambda: [life.habit_report()], lambda: mail.report_lines(24)):
+            try:
+                extra += [x for x in part() if x]
+            except Exception:
+                pass
+        shopping = len(life.items("shopping"))
+        if shopping:
+            extra.append(f"{shopping} thing{'s' if shopping > 1 else ''} on the shopping list.")
         return organizer.daily_report(summary, alerts, extra)
 
     def mail_loop(self):
@@ -151,7 +158,8 @@ class State:
                 p = self.planner_cfg()
                 with self.lock:
                     notifier = Notifier(self.cfg)
-                for kind, title, text in organizer.due_now():
+                from .. import life
+                for kind, title, text in organizer.due_now() + life.habit_checkins():
                     if p["ntfy"]:
                         notifier.send(title, text)
                 if organizer.report_due(p["report_time"]):
@@ -701,6 +709,64 @@ def create_app(state: State, password: str | None) -> Flask:
     @app.get("/api/mail/oauth/<flow_id>")
     def mail_oauth_status(flow_id):
         return jsonify(ms_flows.get(flow_id) or abort(404))
+
+    # ------------------------------------------------------------ lists, habits, memory, weather
+
+    @app.get("/api/life")
+    def life_view():
+        from .. import life
+        return jsonify(items=life.items(include_done=True), lists=life.lists(), habits=life.habits(), memories=life.memories())
+
+    @app.post("/api/life/item")
+    def life_add_item():
+        from .. import life
+        b = request.json or {}
+        return _planner_change(lambda: life.add_items(b.get("list") or "shopping", life.split_items(b.get("text", ""))),
+                               f"list {b.get('list')}: added {b.get('text', '')[:60]}")
+
+    @app.post("/api/life/item/<int:item_id>/<action>")
+    def life_item_action(item_id, action):
+        from .. import life
+        fn = {"check": lambda: life.check(None, str(item_id)), "uncheck": lambda: life.uncheck(item_id),
+              "delete": lambda: life.remove(None, str(item_id))}.get(action) or abort(404)
+        return _planner_change(fn, f"list item {item_id} {action}")
+
+    @app.post("/api/life/clear")
+    def life_clear():
+        from .. import life
+        lst = (request.json or {}).get("list")
+        return _planner_change(lambda: life.clear_done(lst), f"cleared done items{' from ' + lst if lst else ''}")
+
+    @app.post("/api/life/habit")
+    def life_add_habit():
+        from .. import life
+        b = request.json or {}
+        return _planner_change(lambda: life.add_habit(b.get("name", ""), b.get("time", ""), b.get("days") or "daily"), f"habit added: {b.get('name')}")
+
+    @app.post("/api/life/habit/<int:habit_id>/<action>")
+    def life_habit_action(habit_id, action):
+        from .. import life
+        fn = {"done": lambda: life.mark_habit(habit_id), "delete": lambda: life.delete_habit(habit_id)}.get(action) or abort(404)
+        return _planner_change(fn, f"habit {habit_id} {action}")
+
+    @app.post("/api/life/memory/<int:memory_id>/delete")
+    def life_forget(memory_id):
+        from .. import life
+        return _planner_change(lambda: life.forget(str(memory_id)), f"memory {memory_id} forgotten")
+
+    @app.get("/api/weather")
+    def weather_view():
+        from .. import weather
+        with state.lock:
+            loc = dict(state.cfg.get("location") or {})
+        if not loc.get("home"):
+            return jsonify(ok=False, error="No location set")
+        units = loc.get("units") or "metric"
+        try:
+            data = weather.forecast(loc["home"], units)
+            return jsonify(ok=True, today=weather.describe_day(data, 0, units), tomorrow=weather.describe_day(data, 1, units))
+        except weather.WeatherError as e:
+            return jsonify(ok=False, error=str(e))
 
     @app.get("/api/report")
     def report():

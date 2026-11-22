@@ -90,6 +90,11 @@ def _t_notify(cfg, e):
     return "Test notification sent. Check your phone"
 
 
+def _t_location(cfg, e):
+    from .weather import test
+    return test(cfg)
+
+
 def _t_email(cfg, e):
     from .mail import test_account
     return test_account(cfg, e)
@@ -263,7 +268,26 @@ SERVICES: list[Service] = [
                  "even if Claude is your AI brain; with no local model, simple rules sort mail without summaries.",
             fields=[Field("ollama_url", "Ollama address", help="e.g. http://10.0.20.223:11434. Blank = the AI brain's"),
                     Field("model", "Model", help="e.g. gpt-oss:20b or qwen3:8b. Blank = the AI brain's")]),
-    Service("planner", "Reminders & daily report", "Alerts", ("planner",),
+    Service("location", "Weather & commute", "Planner", ("location",), test=_t_location,
+            help="For the weather (Open-Meteo: free, no account) in the daily report and when you ask, and a typical drive time to "
+                 "work on weekday mornings (no live traffic).",
+            fields=[Field("home", "Home", help="City, Country, e.g. Pune, India", required=True),
+                    Field("work", "Work (optional)", help="City or area, e.g. Hinjewadi, India"),
+                    Field("units", "Units", "choice", default="metric", options=["metric", "imperial"])]),
+    Service("backup_watch", "Backup watchdog", "Infrastructure", ("backup_watch",),
+            help="Checks that every Proxmox guest in a backup job has a recent backup, backup jobs didn't fail, ZFS pools are "
+                 "scrubbed and Unraid parity checks run. On by default when Proxmox or Unraid is set up.",
+            fields=[Field("enabled", "Enabled", "bool", default=True),
+                    Field("max_age_hours", "Warn when the newest backup is older than (hours)", "int", default=30),
+                    Field("ignore_vmids", "Guest IDs to ignore", "list", help="e.g. 105, 220"),
+                    Field("scrub_days", "Warn when a ZFS scrub is older than (days)", "int", default=35),
+                    Field("parity_days", "Warn when the Unraid parity check is older than (days)", "int", default=35)]),
+    Service("expiry_watch", "Certificates & domains", "Infrastructure", ("expiry_watch",),
+            help="Warns before HTTPS certificates or domain registrations expire. Self-signed certificates work too.",
+            fields=[Field("hosts", "Websites / services (HTTPS)", "list", help="e.g. nas.example.com, 10.0.20.5:8443"),
+                    Field("domains", "Domains you own", "list", help="e.g. example.com"),
+                    Field("warn_days", "Warn this many days before", "int", default=21)]),
+    Service("planner", "Reminders & daily report", "Planner", ("planner",),
             help="How reminders, bill notices and the daily report reach you. ntfy needs Phone alerts (ntfy) set up; the Jarvis "
                  "app shows them as notifications (exact for reminders, otherwise within 15 minutes); listening devices "
                  "speak them. Ask for the report any time: 'daily report'.",

@@ -39,6 +39,10 @@ HELP = """Things I understand:
   mark rent paid                 moves a repeating bill to its next due date
   daily report                   the morning briefing, any time
   check my email / important emails   what your local AI found in new mail (add bill from email 12)
+  add milk and eggs to the shopping list / shopping list / got milk / clear done items
+  remember that my car needs an oil change every 10,000 km / what do you remember / forget oil
+  add habit take meds at 21:00 / done meds / habits
+  weather / weather tomorrow / will it rain
   search movie dune              look something up (also: show, artist)
   add movie dune                 add it and start searching (also: show, artist)
   search missing movies          ask Radarr/Sonarr/Lidarr to hunt for missing items
@@ -142,6 +146,19 @@ class Assistant:
             (r"^(mark |i paid |paid )(the )?(?P<name>.+?)( bill)?( as)?( paid)?$", self.mark_paid),
             (r"^(check (my )?(e-?mails?|inbox|mail)|(my )?(e-?mails?|inbox|mail)( summary)?|any (new |important )?(e-?mails?|mail)|important (e-?mails?|mail))$", self.email_summary),
             (r"^add (the )?bill from (e-?mail|mail) (?P<n>\d+)$", self.email_bill),
+            (r"^(add|new|track) habit (?P<rest>.+)$", self.habit_add_cmd),
+            (r"^(add|put) (?P<items>.+?) (to|on) (my |the )?(?P<name>[\w -]+?)( list)?$", self.list_add),
+            (r"^(show |what'?s on |read )?(my |the )?(?P<name>shopping|grocery|groceries|todo|to-do|to do|[\w-]+) list$", self.show_list),
+            (r"^(lists|my lists|all lists)$", self.show_list),
+            (r"^(got|bought|done with|tick off|check off|cross off) (?P<item>.+?)( (from|on) (my |the )?(?P<name>[\w -]+?)( list)?)?$", self.list_check_cmd),
+            (r"^(remove|delete) (?P<item>.+?) from (my |the )?(?P<name>[\w -]+?)( list)?$", self.list_remove),
+            (r"^clear (the )?(done|ticked|bought|completed)( items)?( from (my |the )?(?P<name>[\w -]+?)( list)?)?$", self.list_clear),
+            (r"^remember( that)?[:,]? (?P<fact>.+)$", self.remember_cmd),
+            (r"^(what do you remember|what do you know about me|memories|my memories)$", self.list_memories),
+            (r"^forget( about)?[:,]? (?P<what>.+)$", self.forget_cmd),
+            (r"^(done|did|finished|i did|i took|took) (?P<name>.+)$", self.habit_done),
+            (r"^(habits|my habits|habit streaks)$", self.habit_list),
+            (r"^(weather|what'?s the weather( like)?|forecast|will it rain|is it going to rain)( (?P<when>today|tomorrow))?$", self.weather),
             (r"^(daily report|morning report|my report|briefing|morning briefing|daily briefing|give me my (daily |morning )?(report|briefing))$", self.daily_report),
             (rf"^(search|hunt) (for )?missing (?P<kind>{KIND_WORDS})$", self.search_missing),
             (rf"^(search|find|look ?up) (for )?(the |a )?(?P<kind>{KIND_WORDS}) (?P<q>.+)$", self.search),
@@ -863,6 +880,111 @@ class Assistant:
         try:
             return mail.bill_to_calendar(int(m["n"]))
         except ValueError as e:
+            return str(e)
+
+    # ------------------------------------------------------------ lists, memory, habits, weather
+
+    def list_add_items(self, name: str, items: list) -> str:
+        from . import life
+        added = life.add_items(name, items)
+        lst = life.list_name(name)
+        if not added:
+            return f"Those are already on the {lst} list."
+        return f"Added {', '.join(added)} to the {lst} list ({len(life.items(lst))} on it now)."
+
+    def list_add(self, m) -> str:
+        from . import life
+        return self.list_add_items(m.m["name"], life.split_items(m.m["items"]))
+
+    def show_list(self, m) -> str:
+        from . import life
+        if not m["name"]:
+            ls = life.lists()
+            return ("Your lists: " + ", ".join(f"{n} ({c})" for n, c in ls.items())) if ls else "All your lists are empty."
+        lst = life.list_name(m["name"])
+        its = life.items(lst)
+        return (f"{lst.title()} list:\n" + "\n".join(f"  {i['text']}" for i in its)) if its else f"The {lst} list is empty."
+
+    def list_check(self, name, item: str) -> str:
+        from . import life
+        done = [t for t in (life.check(name, it) for it in life.split_items(item)) if t]
+        return f"Ticked off {', '.join(done)}." if done else f"I couldn't find {item} on {'the ' + life.list_name(name) if name else 'your'} lists."
+
+    def list_check_cmd(self, m) -> str:
+        return self.list_check(m.m["name"] if m["name"] else None, m.m["item"])
+
+    def list_remove(self, m) -> str:
+        from . import life
+        t = life.remove(m.m["name"], m.m["item"])
+        return f"Removed {t}." if t else f"{m.m['item']} isn't on the {life.list_name(m.m['name'])} list."
+
+    def list_clear(self, m) -> str:
+        from . import life
+        n = life.clear_done(m.m["name"] if m["name"] else None)
+        return f"Cleared {n} ticked-off item{'s' if n != 1 else ''}."
+
+    def remember_fact(self, fact: str) -> str:
+        from . import life
+        mid = life.remember(fact)
+        return f"I'll remember that. (Memory {mid})"
+
+    def remember_cmd(self, m) -> str:
+        return self.remember_fact(m.m["fact"])
+
+    def list_memories(self, m) -> str:
+        from . import life
+        ms = life.memories()
+        return ("What I remember:\n" + "\n".join(f"  {x['id']}. {x['text']}" for x in ms)) if ms else "You haven't asked me to remember anything yet."
+
+    def forget_fact(self, what: str) -> str:
+        from . import life
+        gone = life.forget(what)
+        return f"Forgotten: {'; '.join(gone)}" if gone else f"I don't remember anything about {what}."
+
+    def forget_cmd(self, m) -> str:
+        return self.forget_fact(m.m["what"])
+
+    def habit_add(self, name: str, time: str, days: str = "daily") -> str:
+        from . import life
+        hid = life.add_habit(name, time, days)
+        return f"I'll check in on {name} at {time} ({days}). Say 'done {name}' when it's done. (Habit {hid})"
+
+    def habit_add_cmd(self, m) -> str:
+        from . import organizer as O
+        rest = m.m["rest"]
+        days = "weekdays" if re.search(r"\bweekdays?\b", rest, re.I) else "weekends" if re.search(r"\bweekends?\b", rest, re.I) else "daily"
+        rest = re.sub(r"\b(every ?day|daily|on weekdays|weekdays?|on weekends|weekends?)\b", " ", rest, flags=re.I)
+        when, _, name = O.parse_when(rest)
+        if not when:
+            return "At what time should I check in? For example: add habit take meds at 21:00."
+        return self.habit_add(name or "habit", when.strftime("%H:%M"), days)
+
+    def habit_done(self, m) -> str:
+        from . import life
+        try:
+            raw = getattr(m, "m", None)
+            return life.mark_habit(raw["name"] if isinstance(raw, re.Match) else m["name"])
+        except ValueError as e:
+            return str(e)
+
+    def habit_list(self, m) -> str:
+        from . import life
+        hs = life.habits()
+        if not hs:
+            return "No habits yet. Try: add habit take meds at 21:00."
+        return "Habits:\n" + "\n".join(f"  {h['name']} at {h['time']} ({h['days']}): " + ("done today" if h["done_today"] else "not done yet" if h["due_today"] else "not today") +
+                                       (f", {h['streak']}-day streak" if h["streak"] > 1 else "") for h in hs)
+
+    def weather(self, m) -> str:
+        from . import weather as W
+        loc = self.cfg.get("location") or {}
+        if not loc.get("home"):
+            return "Set your location first: Setup > Weather & commute."
+        day = m["day"] if m["day"] is not None else (1 if (m["when"] or "") == "tomorrow" else 0)
+        units = loc.get("units") or "metric"
+        try:
+            return W.describe_day(W.forecast(loc["home"], units), int(day), units)
+        except W.WeatherError as e:
             return str(e)
 
     def daily_report(self, m) -> str:
