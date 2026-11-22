@@ -178,7 +178,7 @@ SERVICES: list[Service] = [
             fields=[_url(8085), _key("SABNZBD_API_KEY"), Field("slow_limit_percent", "Slow mode (% of line speed)", "int", default=25),
                     Field("min_free_gb", "Warn below free space (GB)", "int", default=20)]),
 
-    Service("provisioning", "VM creation", "Automation", ("provisioning",), test=_t_provisioning,
+    Service("provisioning", "VM creation", "AI & automation", ("provisioning",), test=_t_provisioning,
             help="Needs a cloud-init template, a write-capable Proxmox token and a pfSense user that may write DHCP mappings. See README 'Creating VMs'.",
             fields=[Field("proxmox", "Proxmox entry name", default="proxmox", required=True),
                     Field("admin_token_id_env", "Write token ID", "secret", env="PVE_ADMIN_TOKEN_ID", required=True, help="e.g. jarvis-admin@pve!provision"),
@@ -193,7 +193,7 @@ SERVICES: list[Service] = [
                     Field("dhcp_interface", "DHCP interface", default="lan"),
                     Field("ip_pool", "IP pool for new VMs", default="192.168.1.200-192.168.1.249", required=True,
                           help="Must be outside pfSense's dynamic DHCP range")]),
-    Service("ai", "AI brain", "Automation", ("ai",), test=_t_ai,
+    Service("ai", "AI brain", "AI & automation", ("ai",), test=_t_ai,
             help="Lets you talk to Jarvis in plain English. 'claude' = Anthropic's cloud (smartest, pay per use, key from "
                  "console.anthropic.com). 'ollama' = a local model, fully offline and free, needs Ollama running on a machine "
                  "with a decent GPU. Exact commands like 'downloads' never use the AI.",
@@ -222,11 +222,11 @@ SERVICES: list[Service] = [
                     Field("default_auth", "Default login", "choice", default="key", options=["key", "password"]),
                     Field("default_password_env", "Default password", "secret", env="DISCOVERY_PASSWORD",
                           help="Tried on guests when you add them with password login and no password typed")]),
-    Service("updates", "Updates", "Alerts", ("updates",),
+    Service("updates", "Updates", "Jarvis", ("updates",),
             help="Jarvis updates itself from its GitHub repo (the button at the top of this page). For a private repo, create a "
                  "fine-grained GitHub token with read-only 'Contents' access to that one repo and paste it here.",
             fields=[Field("token_env", "GitHub token (private repos only)", "secret", env="JARVIS_GIT_TOKEN")]),
-    Service("web", "Web dashboard", "Alerts", ("web",),
+    Service("web", "Web dashboard", "Jarvis", ("web",),
             help="Only needed to open the dashboard from other devices. Without a password it only listens on this PC.",
             fields=[Field("password_env", "Dashboard password", "secret", env="JARVIS_WEB_PASSWORD"),
                     Field("host", "Listen on", default="127.0.0.1", help="0.0.0.0 = whole network (password required)"),

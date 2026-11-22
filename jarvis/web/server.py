@@ -25,7 +25,8 @@ from ..monitor import Monitor, spoken_summary
 
 STATIC = Path(__file__).parent / "static"
 APP_FILES = {"/manifest.webmanifest": "application/manifest+json", "/sw.js": "text/javascript",
-             "/icon-192.png": "image/png", "/icon-512.png": "image/png"}
+             "/icon-192.png": "image/png", "/icon-512.png": "image/png",
+             "/themes.css": "text/css", "/theme.js": "text/javascript"}
 SECRET_FILE = Path("data/web_secret")
 
 
@@ -320,6 +321,29 @@ def create_app(state: State, password: str | None) -> Flask:
         S.remove(sid, int((request.json or {}).get("index", 0)))
         state.reload()
         return jsonify(ok=True)
+
+    @app.post("/api/media-discover")
+    def media_discover():
+        from .. import media_discovery
+        with state.lock:
+            cfg = state.cfg
+        try:
+            return jsonify(ok=True, **media_discovery.scan(cfg))
+        except Exception as e:
+            return jsonify(ok=False, error=f"{type(e).__name__}: {e}")
+
+    @app.post("/api/media-discover/add")
+    def media_discover_add():
+        from .. import media_discovery
+        from ..audit import audit
+        b = request.json or {}
+        try:
+            service, message = media_discovery.add(str(b.get("id", "")), str(b.get("secret") or ""), str(b.get("username") or ""))
+        except ValueError as e:
+            return jsonify(ok=False, error=str(e))
+        audit(f"setup: added {service} from media discovery")
+        state.reload()
+        return jsonify(ok=True, service=service, message=message)
 
     @app.get("/api/discover")
     def discover():

@@ -26,6 +26,18 @@ class Prefs(context: Context) {
     var knownProblems: Set<String>?
         get() = sp.getStringSet("known_problems", null)
         set(v) = sp.edit().putStringSet("known_problems", v).apply()
+    var theme: String
+        get() = sp.getString("theme", "system") ?: "system"
+        set(v) = sp.edit().putString("theme", v).apply()
+    var autoUpdate: Boolean
+        get() = sp.getBoolean("auto_update", true)
+        set(v) = sp.edit().putBoolean("auto_update", v).apply()
+    var lastUpdateCheck: Long
+        get() = sp.getLong("last_update_check", 0)
+        set(v) = sp.edit().putLong("last_update_check", v).apply()
+    var skippedVersion: String?
+        get() = sp.getString("skipped_version", null)
+        set(v) = sp.edit().putString("skipped_version", v).apply()
     var loginNagged: Boolean
         get() = sp.getBoolean("login_nagged", false)
         set(v) = sp.edit().putBoolean("login_nagged", v).apply()

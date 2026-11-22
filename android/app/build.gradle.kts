@@ -1,7 +1,18 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.compose")
+}
+
+// The release signing key lives outside the repo. Point JARVIS_KEYSTORE_PROPS at a keystore.properties file
+// (storeFile, storePassword, keyAlias, keyPassword), or put one at android/keystore.properties (git-ignored).
+// Every update must be signed with the same key, or Android refuses to install it over the old version.
+val signing = Properties().apply {
+    val path = System.getenv("JARVIS_KEYSTORE_PROPS") ?: rootProject.file("keystore.properties").path
+    val f = file(path)
+    if (f.exists()) f.inputStream().use { load(it) }
 }
 
 android {
@@ -12,14 +23,26 @@ android {
         applicationId = "com.jarvis.homelab"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "1.0"
+        // Bump both for every release, and tag the GitHub release android-v<versionName>.
+        versionCode = 2
+        versionName = "1.1"
+    }
+
+    signingConfigs {
+        if (signing.getProperty("storeFile") != null) {
+            create("release") {
+                storeFile = file(signing.getProperty("storeFile"))
+                storePassword = signing.getProperty("storePassword")
+                keyAlias = signing.getProperty("keyAlias")
+                keyPassword = signing.getProperty("keyPassword")
+            }
+        }
     }
 
     buildTypes {
         release {
-            isMinifyEnabled = true
-            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"))
+            isMinifyEnabled = false
+            signingConfig = signingConfigs.findByName("release") ?: signingConfigs.getByName("debug")
         }
     }
     compileOptions {
@@ -31,6 +54,7 @@ android {
     }
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 }
 

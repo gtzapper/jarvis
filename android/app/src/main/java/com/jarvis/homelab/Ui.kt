@@ -16,6 +16,9 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -35,6 +38,8 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
@@ -45,7 +50,9 @@ import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -77,6 +84,8 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -106,6 +115,7 @@ fun JarvisApp(vm: JarvisViewModel, tab: MutableState<String>) {
             notifyPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
     }
+    if (vm.showUpdateDialog) UpdateDialog(vm)
     if (!vm.connected) {
         ConnectScreen(vm)
         return
@@ -129,6 +139,9 @@ fun JarvisApp(vm: JarvisViewModel, tab: MutableState<String>) {
         },
     ) { inner ->
         Column(Modifier.fillMaxSize().padding(inner).consumeWindowInsets(inner)) {
+            vm.downloadProgress?.let { p ->
+                LinearProgressIndicator(progress = { p }, modifier = Modifier.fillMaxWidth())
+            }
             vm.banner?.let {
                 Text(it, color = MaterialTheme.colorScheme.onErrorContainer, fontSize = 13.sp,
                     modifier = Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.errorContainer).padding(10.dp))
@@ -401,15 +414,25 @@ fun ActivityScreen(vm: JarvisViewModel) {
 
 // ---------------------------------------------------------------- settings
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun SettingsScreen(vm: JarvisViewModel) {
     val context = LocalContext.current
     var alerts by remember { mutableStateOf(vm.prefs.alerts) }
     var speak by remember { mutableStateOf(vm.prefs.speak) }
+    var autoUpdate by remember { mutableStateOf(vm.prefs.autoUpdate) }
     val notifyPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {}
-    Column(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+    val c = MaterialTheme.colorScheme
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
         Text("Settings", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-        Text("Connected to ${vm.prefs.server}", color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text("Connected to ${vm.prefs.server}", color = c.onSurfaceVariant)
+
+        SectionTitle("Theme")
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            THEMES.forEach { t -> ThemeSwatch(t, selected = vm.theme == t.id) { vm.chooseTheme(t.id) } }
+        }
+
+        SectionTitle("Notifications and voice")
         SettingRow("Lab alerts", "Every 15 minutes, check Jarvis and notify me about new problems", alerts) {
             alerts = it; vm.prefs.alerts = it
             if (it) {
@@ -418,14 +441,77 @@ fun SettingsScreen(vm: JarvisViewModel) {
             } else AlertWorker.cancel(context)
         }
         SettingRow("Speak replies", "Read Jarvis's answer aloud when you asked by voice", speak) { speak = it; vm.prefs.speak = it }
+
+        SectionTitle("App updates")
+        SettingRow("Check automatically", "Look for a new version once a day", autoUpdate) { autoUpdate = it; vm.prefs.autoUpdate = it }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("Version ${vm.version}", fontWeight = FontWeight.SemiBold)
+                if (vm.updateStatus.isNotEmpty()) Text(vm.updateStatus, fontSize = 13.sp, color = c.onSurfaceVariant)
+            }
+            if (vm.update != null && vm.downloadProgress == null) Button({ vm.installUpdate() }) { Text("Update") }
+            else OutlinedButton({ vm.checkForUpdate(manual = true) }, enabled = vm.downloadProgress == null && vm.updateStatus != "Checking...") { Text("Check now") }
+        }
+        vm.downloadProgress?.let { LinearProgressIndicator(progress = { it }, modifier = Modifier.fillMaxWidth()) }
+
+        SectionTitle("Jarvis")
         OutlinedButton({ context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(vm.prefs.server))) }, Modifier.fillMaxWidth()) {
             Text("Open the full dashboard (Setup, Devices)")
         }
         OutlinedButton({ vm.logout() }, Modifier.fillMaxWidth()) { Text("Log out / change Jarvis") }
-        Spacer(Modifier.weight(1f))
-        Text("Jarvis for Android ${BuildConfigVersion.NAME}. Destructive actions always ask, whatever the mode.",
-            fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text("Destructive actions always ask, whatever the mode.", fontSize = 12.sp, color = c.onSurfaceVariant)
     }
+}
+
+@Composable
+fun SectionTitle(text: String) {
+    Text(text.uppercase(), fontSize = 12.sp, letterSpacing = 0.6.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
+        fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 6.dp))
+}
+
+@Composable
+fun ThemeSwatch(t: AppTheme, selected: Boolean, onClick: () -> Unit) {
+    val c = MaterialTheme.colorScheme
+    Column(
+        Modifier.width(96.dp).clip(RoundedCornerShape(12.dp))
+            .border(2.dp, if (selected) c.primary else c.outline, RoundedCornerShape(12.dp))
+            .clickable(onClick = onClick),
+    ) {
+        Box(Modifier.fillMaxWidth().height(48.dp).background(
+            if (t.id == "system") Brush.linearGradient(0.5f to t.panel, 0.5f to t.bg) else Brush.linearGradient(listOf(t.bg, t.bg)))) {
+            if (t.id != "system") Box(Modifier.align(Alignment.BottomStart).padding(start = 8.dp, bottom = 8.dp).width(52.dp).height(10.dp)
+                .background(t.panel, RoundedCornerShape(4.dp)).border(1.dp, Color(0x22FFFFFF), RoundedCornerShape(4.dp)))
+            Box(Modifier.align(Alignment.BottomEnd).padding(8.dp).size(12.dp).background(t.accent, CircleShape))
+        }
+        Text(t.name, fontSize = 12.sp, modifier = Modifier.fillMaxWidth().background(c.surface).padding(horizontal = 8.dp, vertical = 5.dp),
+            maxLines = 1, color = c.onSurface)
+    }
+}
+
+@Composable
+fun UpdateDialog(vm: JarvisViewModel) {
+    val u = vm.update ?: return
+    AlertDialog(
+        onDismissRequest = { vm.showUpdateDialog = false },
+        title = { Text("Jarvis ${u.version} is available") },
+        text = {
+            Column(Modifier.heightIn(max = 320.dp).verticalScroll(rememberScrollState())) {
+                Text("You have ${vm.version}." + if (u.size > 0) " Download size: ${"%.1f".format(u.size / 1_048_576.0)} MB." else "",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 14.sp)
+                if (u.notes.isNotEmpty()) {
+                    Spacer(Modifier.height(10.dp))
+                    Text(u.notes, fontSize = 14.sp)
+                }
+            }
+        },
+        confirmButton = { Button({ vm.installUpdate() }) { Text("Update") } },
+        dismissButton = {
+            Row {
+                TextButton({ vm.skipUpdate() }) { Text("Skip this version") }
+                TextButton({ vm.showUpdateDialog = false }) { Text("Later") }
+            }
+        },
+    )
 }
 
 @Composable
@@ -438,8 +524,6 @@ fun SettingRow(title: String, help: String, checked: Boolean, onChange: (Boolean
         Switch(checked, onChange)
     }
 }
-
-object BuildConfigVersion { const val NAME = "1.0" }
 
 // ---------------------------------------------------------------- icons not in the core icon set
 

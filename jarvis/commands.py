@@ -40,6 +40,7 @@ HELP = """Things I understand:
   indexers / test indexers       Prowlarr indexer health
   hosts                          machines I can run commands on
   scan proxmox                   find every VM/LXC, its IP, and whether Jarvis can log in
+  find media apps                find Plex, the *arrs and download clients in Docker, VMs and LXCs
   run uptime on web1             run a shell command on a host (always asks first)
   create vm web1 [with 4 cores 8gb ram 64gb disk]   new VM from your template + static IP on pfSense
   check vm setup                 test the VM-creation permissions without changing anything
@@ -93,6 +94,7 @@ class Assistant:
             (r"^(mode|what mode|which mode|what mode are you in|permission mode)$", self.set_mode),
             (r"^(hosts|list hosts|machines|servers)$", self.hosts),
             (r"^(scan proxmox|discover( vms| guests)?|find (my )?(vms|guests|containers))$", self.discover),
+            (r"^(find|discover|scan for|look for) (my |the )?(media( apps| services| stack)?|arr apps|\*arrs?)$", self.discover_media),
             (r"^(run|exec|execute) (?P<cmd>.+?) on (?P<host>[\w.-]+)$", self.run),
             (r"^on (?P<host>[\w.-]+)[,:]? (run |exec |execute )?(?P<cmd>.+)$", self.run),
             (r"^check (vm|provisioning) setup$", self.check_vm_setup),
@@ -345,6 +347,24 @@ class Assistant:
             return "No hosts are set up for commands. Add them under linux_hosts in config.yaml."
         return "I can run commands on:\n" + "\n".join(
             f"  {h['name']}: {h.get('user', 'root')}@{h['host']}" + (" (Windows, PowerShell)" if h.get("os") == "windows" else "") for h in hosts)
+
+    def discover_media(self, m) -> str:
+        from . import media_discovery
+        self.say("Looking for media apps in Docker containers and on your Proxmox guests...")
+        r = media_discovery.scan(self.cfg)
+        if not r["found"]:
+            tail = ("\n" + "\n".join(r["notes"])) if r["notes"] else ""
+            return "I didn't find any media apps. Is Proxmox set up, and are your Docker hosts added (VMs / servers, Unraid)?" + tail
+        lines = []
+        for f in r["found"]:
+            state = ("already in Jarvis" if f["configured"] else "can't reach it" if not f["url"]
+                     else "key found, ready to add" if f["key_found"] else f"needs its {f['needs']}" if f["needs"] else "ready to add")
+            lines.append(f"  {f['label']}: {f['url'] or '-'} ({f['where']}): {state}")
+        new = sum(1 for f in r["found"] if not f["configured"] and f["url"])
+        tail = f"\nAdd them in Setup > Find media apps automatically ({new} new)." if new else ""
+        if r["notes"]:
+            tail += "\nCouldn't check: " + "; ".join(r["notes"])
+        return f"Found {len(r['found'])} media app(s):\n" + "\n".join(lines) + tail
 
     def discover(self, m) -> str:
         from .discovery import Discovery

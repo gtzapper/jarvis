@@ -286,6 +286,17 @@ The test shows whether Ollama is reachable, whether the model is installed and w
 
 Switching between Claude and Ollama is just the Provider setting. Your API key stays saved either way.
 
+## Finding your media apps automatically
+Setup → **Find media apps automatically** → Scan (or say `find media apps` in the chat). Jarvis looks for Plex, Sonarr, Radarr, Lidarr, Prowlarr, Overseerr/Jellyseerr, qBittorrent, Deluge and SABnzbd in three places:
+
+- **Docker on Unraid and on your VMs/LXCs** (any machine under Unraid or VMs / servers): it lists the containers, recognises the apps by image or name (linuxserver, hotio, binhex, plexinc and others), and works out the address from the published ports. Host networking and containers with their own IP (Unraid br0/macvlan) work too.
+- **Apps installed directly in Proxmox VMs and LXCs**: it checks each running guest's IP on the apps' usual ports.
+- Every find is confirmed by asking the app to identify itself, so nothing is guessed.
+
+Where Jarvis can log into the machine, it reads the API key from the app's own config file (Sonarr/Radarr/Lidarr/Prowlarr `config.xml`, Plex `Preferences.xml`, Overseerr `settings.json`, `sabnzbd.ini`). Then **Add** saves and tests it in one click. Keys stay on the Jarvis server and go into `.env`; the browser only ever sees "key found". qBittorrent and Deluge store hashed passwords, so you type those (or leave qBittorrent's blank if you whitelisted Jarvis's IP).
+
+Reading keys needs root inside the container or guest: log in as root, or give the Jarvis user passwordless sudo (or use password login). Scanning changes nothing.
+
 ## Windows VMs and PCs
 Windows machines are monitored and controlled over the same SSH key, using Windows' built-in **OpenSSH Server** and **PowerShell**.
 
@@ -404,7 +415,26 @@ A native app in `android/`: chat with live steps, approve or decline actions (de
 
 **Install:** copy `Jarvis.apk` to your phone and open it. Android asks you to allow installs from that app (Files, Chrome...) the first time. Then enter your Jarvis address (the one you open the dashboard with) and the dashboard password. The password isn't stored on the phone; the app keeps the login session, like a browser.
 
-**Build it yourself:** open `android/` in Android Studio, or run `gradlew assembleDebug` inside `android/` (needs the Android SDK, and Java 17 or newer). The APK appears at `android/app/build/outputs/apk/debug/app-debug.apk`.
+**Themes:** Settings → Theme: System, Light, Dark, Midnight, Ember, Forest or High contrast (the same set as the dashboard's Setup → Appearance).
+
+**Updates:** the app looks for a new version once a day (Settings → App updates, or tap **Check now**). When there is one, it shows what changed, downloads it inside the app, checks it, and opens Android's installer. The first time, Android asks you to allow Jarvis to install apps. "Skip this version" stops the daily reminder for that version.
+
+The app finds new versions on this repo's GitHub Releases: a release tagged `android-v<version>` (for example `android-v1.2`) with the `.apk` attached.
+
+**Publishing a new version:**
+1. In `android/app/build.gradle.kts`, raise `versionCode` by one and set `versionName` (for example `1.2`).
+2. Build the signed APK. `JARVIS_KEYSTORE_PROPS` points at your signing key's settings file:
+   ```
+   cd android
+   set JARVIS_KEYSTORE_PROPS=D:\AndroidBuild\keys\keystore.properties
+   gradlew assembleRelease
+   ```
+   The APK appears at `android/app/build/outputs/apk/release/app-release.apk`.
+3. On GitHub: Releases → Draft a new release → tag `android-v1.2` → write what changed (the app shows this text) → attach the APK → Publish.
+
+**Keep the signing key safe.** Android only installs an update if it's signed with the same key as the installed app. The key is `jarvis-release.jks` plus `keystore.properties` (which holds its password), kept outside the repo. Back both up somewhere safe. If they're lost, every phone has to uninstall the app and install it fresh. Never commit them.
+
+**Build it yourself:** open `android/` in Android Studio, or run `gradlew assembleDebug` inside `android/` (needs the Android SDK, and Java 17 or newer). A debug build is signed with your own debug key, so it can't update over a release build, or the other way round.
 
 The app allows plain `http://` because Jarvis normally runs at a local address. Away from home, connect through a VPN (WireGuard on pfSense, or Tailscale) rather than opening Jarvis to the internet.
 

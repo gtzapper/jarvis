@@ -10,19 +10,12 @@
 <meta name="theme-color" content="#f4f5f7" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#0f1216" media="(prefers-color-scheme: dark)">
 <meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Jarvis">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="stylesheet" href="/themes.css">
+<script src="/theme.js"></script>
 <style>
-:root {
-  --bg: #f4f5f7; --panel: #ffffff; --panel2: #f9fafb; --text: #1b1f24; --muted: #667085; --line: #e4e7ec;
-  --accent: #2563eb; --accent-text: #ffffff; --ok: #16a34a; --warn: #d97706; --crit: #dc2626;
-  --ok-bg: #dcfce7; --warn-bg: #fef3c7; --crit-bg: #fee2e2; --shadow: 0 1px 2px rgba(16,24,40,.06);
-}
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #0f1216; --panel: #171b21; --panel2: #1d222a; --text: #e6e8eb; --muted: #98a2b3; --line: #2a313b;
-    --accent: #3b82f6; --ok: #22c55e; --warn: #f59e0b; --crit: #ef4444;
-    --ok-bg: #12301d; --warn-bg: #3a2a0c; --crit-bg: #3b1515; --shadow: none;
-  }
-}
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
 button, input, select { font: inherit; color: inherit; }
@@ -88,6 +81,54 @@ h1 { font-size: 20px; margin: 0 0 4px; }
 .msg .steps li::before { content: "•"; position: absolute; left: 2px; }
 .msg .steps li.sub { padding-left: 24px; } .msg .steps li.sub::before { content: ""; }
 .msg .warn { color: var(--crit); font-weight: 600; }
+/* setup */
+.setup-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+.start { margin-bottom: 16px; }
+.start .bar { height: 6px; border-radius: 99px; background: var(--panel2); border: 1px solid var(--line); overflow: hidden; margin: 10px 0 14px; }
+.start .bar > i { display: block; height: 100%; background: var(--accent); border-radius: 99px; transition: width .4s; }
+.steps-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 8px; }
+.step { display: flex; gap: 10px; align-items: center; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel2); cursor: pointer; text-align: left; }
+.step:hover { border-color: var(--accent); }
+.step .tick { width: 22px; height: 22px; border-radius: 50%; border: 2px solid var(--line); flex: none; display: grid; place-items: center; font-size: 13px; font-weight: 700; }
+.step.done { cursor: default; } .step.done:hover { border-color: var(--line); }
+.step.done .tick { background: var(--ok); border-color: var(--ok); color: var(--bg); }
+.step.done .label { color: var(--muted); text-decoration: line-through; }
+.setup-tools { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 6px; }
+.setup-tools input[type=search] { max-width: 280px; }
+.tabs { display: flex; gap: 6px; flex-wrap: wrap; }
+.tabs button { border: 1px solid var(--line); background: var(--panel); border-radius: 99px; padding: 5px 12px; cursor: pointer; font-size: 13px; color: var(--muted); }
+.tabs button.on { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+.tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 12px; }
+.tile { display: flex; gap: 12px; align-items: flex-start; text-align: left; padding: 14px; border-radius: 12px; border: 1px solid var(--line); background: var(--panel); cursor: pointer; box-shadow: var(--shadow); transition: border-color .15s, transform .15s; }
+.tile:hover { border-color: var(--accent); transform: translateY(-1px); }
+.tile .ico { width: 40px; height: 40px; border-radius: 10px; flex: none; display: grid; place-items: center; font-weight: 800; font-size: 14px; letter-spacing: -.3px;
+  color: var(--hue); background: color-mix(in srgb, var(--hue) 16%, transparent); }
+.tile .txt { min-width: 0; flex: 1; }
+.ico.mini { width: 28px; height: 28px; border-radius: 7px; display: grid; place-items: center; font-weight: 800; font-size: 11px; flex: none;
+  color: var(--hue); background: color-mix(in srgb, var(--hue) 16%, transparent); }
+.tile .name { font-weight: 600; display: flex; justify-content: space-between; gap: 8px; align-items: center; }
+.tile .desc { color: var(--muted); font-size: 13px; margin-top: 3px; }
+.jarvis-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; }
+.jarvis-cards .card { margin: 0; }
+.themes { display: grid; grid-template-columns: repeat(auto-fill, minmax(92px, 1fr)); gap: 8px; margin-top: 10px; }
+.theme { border: 2px solid var(--line); border-radius: 10px; padding: 0; overflow: hidden; cursor: pointer; background: none; text-align: left; }
+.theme.on { border-color: var(--accent); }
+.theme .pv { height: 46px; position: relative; }
+.theme .pv i { position: absolute; left: 8px; right: 22px; bottom: 8px; height: 10px; border-radius: 4px; }
+.theme .pv b { position: absolute; right: 8px; bottom: 8px; width: 10px; height: 10px; border-radius: 50%; }
+.theme span { display: block; font-size: 12px; padding: 5px 7px; color: var(--text); background: var(--panel); }
+dialog.sheet { border: 1px solid var(--line); border-radius: 16px; padding: 0; width: min(760px, calc(100vw - 32px)); max-height: calc(100vh - 48px);
+  background: var(--bg); color: var(--text); box-shadow: 0 20px 60px rgba(0,0,0,.35); }
+dialog.sheet::backdrop { background: rgba(0,0,0,.45); backdrop-filter: blur(2px); }
+.sheet-head { position: sticky; top: 0; z-index: 1; display: flex; gap: 12px; align-items: center; padding: 16px 18px; background: var(--panel); border-bottom: 1px solid var(--line); }
+.sheet-head .ico { width: 40px; height: 40px; border-radius: 10px; display: grid; place-items: center; font-weight: 800; color: var(--hue); background: color-mix(in srgb, var(--hue) 16%, transparent); flex: none; }
+.sheet-head h2 { margin: 0; font-size: 18px; } .sheet-head .grow { flex: 1; min-width: 0; }
+.sheet-body { padding: 16px 18px 20px; }
+.howto { background: var(--accent-soft); border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent); border-radius: 10px; padding: 12px 14px; margin-bottom: 14px; font-size: 13px; }
+.howto strong { display: block; margin-bottom: 4px; }
+.entry-title { font-weight: 600; margin-bottom: 10px; display: flex; justify-content: space-between; align-items: center; }
+.x { background: none; border: 0; font-size: 22px; line-height: 1; cursor: pointer; color: var(--muted); padding: 4px 8px; border-radius: 8px; }
+.x:hover { background: var(--panel2); color: var(--text); }
 .composer { display: flex; gap: 8px; }
 .composer input { flex: 1; padding: 11px 13px; border-radius: 10px; border: 1px solid var(--line); background: var(--panel); }
 /* tables & forms */
@@ -129,6 +170,10 @@ select.select, input[type=text], input[type=password], input[type=number], input
   .chip { flex: none; }
   .modehelp { display: none; }
   .composer input { font-size: 16px; }
+  dialog.sheet { width: 100vw; max-width: 100vw; height: 100dvh; max-height: 100dvh; margin: 0; border-radius: 0; border: 0; }
+  .setup-tools input[type=search] { max-width: none; }
+  .tabs { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; width: 100%; }
+  .tabs button { flex: none; }
   .msg { max-width: 92%; }
   .grid { grid-template-columns: 1fr; }
 }
@@ -188,15 +233,31 @@ select.select, input[type=text], input[type=password], input[type=number], input
     </section>
 
     <section id="setup" hidden>
-      <div class="row" style="justify-content:space-between;align-items:center"><h1>Setup</h1><button class="btn mobile-only" id="logout2" hidden>Log out</button></div>
-      <p class="sub">Add your services here. Keys and passwords are saved to <code>.env</code> on this PC and are never shown again; leave a secret field blank to keep its current value.</p>
-      <div class="card" id="versioncard" style="margin-bottom:12px"></div>
-      <div class="card" id="sshcard"></div>
-      <div class="card" id="discovercard" style="margin-top:12px"></div>
+      <div class="setup-head">
+        <div>
+          <h1>Setup</h1>
+          <p class="sub">Connect your services. Passwords and keys are saved in <code>.env</code> on the Jarvis host and never shown again.</p>
+        </div>
+        <button class="btn mobile-only" id="logout2" hidden>Log out</button>
+      </div>
+      <div class="card start" id="startcard"></div>
+      <div class="card" id="mediacard" style="margin-bottom:16px"></div>
+      <div class="setup-tools">
+        <input type="search" id="setupsearch" placeholder="Search services, e.g. sonarr" aria-label="Search services">
+        <div class="tabs" id="setuptabs" role="tablist"></div>
+      </div>
       <div id="services"></div>
+      <div class="group-title">Appearance and maintenance</div>
+      <div class="jarvis-cards">
+        <div class="card" id="appearancecard"></div>
+        <div class="card" id="versioncard"></div>
+        <div class="card" id="sshcard"></div>
+      </div>
+      <div class="card" id="discovercard" style="margin-top:12px"></div>
     </section>
   </main>
 </div>
+<dialog id="svcdialog" class="sheet" aria-labelledby="svctitle"></dialog>
 
 <script>
 const $ = (s, el = document) => el.querySelector(s);
@@ -336,15 +397,183 @@ async function loadActivity() {
 }
 
 /* ---------- setup ---------- */
+// Short descriptions and icon colours for the service tiles.
+const SVC_META = {
+  proxmox: ["Px", "#e57000", "Nodes, VMs and containers: health, CPU, memory and disks"],
+  pfsense: ["pf", "#4f7cff", "Gateways, firewall states and every device on your network"],
+  unraid: ["Un", "#f15a2c", "Array, disks, Docker containers and temperatures"],
+  linux_hosts: ["VM", "#14b8a6", "Your VMs and servers: health checks, commands and updates"],
+  discovery: ["Ds", "#8b5cf6", "What Jarvis tries when you add a guest found on Proxmox"],
+  plex: ["Pl", "#e5a00d", "Who's watching, recently added and library scans"],
+  sonarr: ["So", "#35c5f4", "TV shows: queue, calendar and adding new shows"],
+  radarr: ["Ra", "#ffc230", "Movies: queue, calendar and adding new movies"],
+  lidarr: ["Li", "#22c55e", "Music: queue and adding artists"],
+  prowlarr: ["Pr", "#e66000", "Indexer health and tests"],
+  overseerr: ["Ov", "#a78bfa", "See, approve or decline requests"],
+  qbittorrent: ["qB", "#2f67ba", "Torrent speeds, pause, resume and slow mode"],
+  deluge: ["De", "#4b8fd6", "Torrent speeds, pause, resume and slow mode"],
+  sabnzbd: ["SB", "#f5c518", "Usenet queue, pause, resume and speed limit"],
+  provisioning: ["Vm+", "#10b981", "Create VMs from a template with a static IP on pfSense"],
+  ai: ["AI", "#d97757", "Talk to Jarvis in plain English (Claude or a local model)"],
+  notify: ["nt", "#38bdf8", "Push alerts to your phone with the ntfy app"],
+  updates: ["Up", "#94a3b8", "GitHub token, only needed for a private repo"],
+  web: ["Wb", "#60a5fa", "Dashboard password and who can open it"],
+};
+const GROUP_ORDER = ["Infrastructure", "Media", "Downloads", "AI & automation", "Alerts", "Jarvis"];
+let setupData = null, setupTab = "All", openSvc = null;
+
+function svcIcon(id, cls = "ico") {
+  const [abbr, hue] = SVC_META[id] || [id.slice(0, 2), "#94a3b8"];
+  return el("div", { class: cls, style: `--hue:${hue}` }, abbr);
+}
+function svcBadge(svc) {
+  const n = svc.entries.length;
+  return n ? el("span", { class: "pill ok" }, svc.multi ? `${n} connected` : "Connected") : el("span", { class: "pill mute" }, "Not set up");
+}
 async function loadSetup() {
   const s = await api("/api/setup");
+  setupData = s;
   renderSsh(s.ssh_public_key);
+  renderAppearance();
   loadVersion();
   if (!$("#discovercard").dataset.loaded) renderDiscoverIntro();
+  renderStart();
+  renderMediaIntro();
+  renderTiles();
+  if (openSvc && $("#svcdialog").open) openService(openSvc, true);
+}
+function renderStart() {
+  const s = setupData, by = Object.fromEntries(s.services.map(x => [x.id, x]));
+  const has = id => by[id] && by[id].entries.length > 0;
+  const web = by.web && by.web.entries[0];
+  const steps = [
+    ["Create Jarvis's SSH key", !!s.ssh_public_key, () => $("#sshcard").scrollIntoView({ behavior: "smooth", block: "center" })],
+    ["Connect Proxmox", has("proxmox"), () => openService("proxmox")],
+    ["Connect pfSense", has("pfsense"), () => openService("pfsense")],
+    ["Add your VMs or Unraid", has("linux_hosts") || has("unraid"), () => openService("linux_hosts")],
+    ["Set up the AI brain", has("ai"), () => openService("ai")],
+    ["Set a dashboard password", !!(web && web.password_env && web.password_env.set), () => openService("web")],
+  ];
+  const done = steps.filter(x => x[1]).length;
+  const card = $("#startcard");
+  if (done === steps.length && card.dataset.dismissed !== "0") {
+    put(card, el("div", { class: "row", style: "justify-content:space-between" },
+      el("div", {}, el("strong", {}, "You're all set."), el("span", { class: "help", style: "margin-left:8px" }, "Everything essential is connected.")),
+      el("button", { class: "btn", onclick: () => { card.dataset.dismissed = "0"; renderStart(); } }, "Show checklist")));
+    return;
+  }
+  put(card,
+    el("div", { class: "row", style: "justify-content:space-between" }, el("strong", {}, "Getting started"), el("span", { class: "help" }, `${done} of ${steps.length} done`)),
+    el("div", { class: "bar" }, el("i", { style: `width:${Math.round(done * 100 / steps.length)}%` })),
+    el("div", { class: "steps-list" }, steps.map(([label, ok, go], i) =>
+      el("button", { type: "button", class: "step" + (ok ? " done" : ""), onclick: ok ? null : go, disabled: ok ? true : null },
+        el("span", { class: "tick" }, ok ? "✓" : String(i + 1)), el("span", { class: "label" }, label)))));
+}
+function renderTiles() {
+  const q = $("#setupsearch").value.trim().toLowerCase();
   const groups = {};
-  s.services.forEach(svc => (groups[svc.group] ||= []).push(svc));
-  const open = new Set([...document.querySelectorAll("#services details[open]")].map(d => d.dataset.id));
-  put($("#services"), ...Object.entries(groups).flatMap(([g, list]) => [el("div", { class: "group-title" }, g), ...list.map(svc => serviceCard(svc, open.has(svc.id)))]));
+  setupData.services.forEach(svc => (groups[svc.group] ||= []).push(svc));
+  const names = [...GROUP_ORDER.filter(g => groups[g]), ...Object.keys(groups).filter(g => !GROUP_ORDER.includes(g))];
+  put($("#setuptabs"), ["All", ...names].map(g => el("button", { type: "button", role: "tab", "aria-selected": String(g === setupTab), class: g === setupTab ? "on" : "",
+    onclick: () => { setupTab = g; renderTiles(); } }, g)));
+  const match = svc => !q || [svc.label, svc.id, (SVC_META[svc.id] || [])[2] || "", svc.group].join(" ").toLowerCase().includes(q);
+  const sections = names.filter(g => setupTab === "All" || g === setupTab).map(g => {
+    const list = groups[g].filter(match);
+    if (!list.length) return null;
+    return [el("div", { class: "group-title" }, g), el("div", { class: "tiles" }, list.map(svc =>
+      el("button", { type: "button", class: "tile", onclick: () => openService(svc.id) }, svcIcon(svc.id),
+        el("div", { class: "txt" }, el("div", { class: "name" }, el("span", {}, svc.label), svcBadge(svc)),
+          el("div", { class: "desc" }, (SVC_META[svc.id] || [])[2] || "")))))];
+  }).filter(Boolean);
+  put($("#services"), sections.length ? sections : el("div", { class: "card empty", style: "margin-top:12px" }, `Nothing matches "${q}".`));
+}
+$("#setupsearch").oninput = () => { if (setupData) renderTiles(); };
+function openService(id, keepScroll = false) {
+  const svc = setupData.services.find(x => x.id === id);
+  if (!svc) return;
+  openSvc = id;
+  const dlg = $("#svcdialog");
+  const scroll = dlg.scrollTop;
+  const body = el("div", { class: "sheet-body" },
+    svc.help ? el("div", { class: "howto" }, el("strong", {}, "How to connect"), svc.help) : null);
+  if (!svc.editable) body.append(el("p", { class: "result bad" }, "This has several instances in config.yaml. Edit that file by hand."));
+  else {
+    svc.entries.forEach((e, i) => body.append(entryForm(svc, e, i)));
+    if (svc.multi || !svc.entries.length) {
+      const label = svc.entries.length ? `+ Add another` : `Set up ${svc.label}`;
+      const add = el("button", { class: svc.entries.length ? "btn" : "btn primary", onclick: () => add.replaceWith(entryForm(svc, null, null)) }, label);
+      body.append(svc.entries.length ? add : entryForm(svc, null, null));
+    }
+  }
+  put(dlg,
+    el("div", { class: "sheet-head" }, svcIcon(svc.id),
+      el("div", { class: "grow" }, el("h2", { id: "svctitle" }, svc.label), el("div", { class: "help", style: "margin:2px 0 0" }, (SVC_META[svc.id] || [])[2] || svc.group)),
+      svcBadge(svc), el("button", { class: "x", "aria-label": "Close", onclick: () => dlg.close() }, "×")),
+    body);
+  if (!dlg.open) dlg.showModal();
+  if (keepScroll) dlg.scrollTop = scroll;
+}
+$("#svcdialog").addEventListener("close", () => { openSvc = null; });
+$("#svcdialog").addEventListener("click", e => { if (e.target === e.currentTarget) e.currentTarget.close(); });  // click outside
+const APP_TO_SVC = { overseerr: "overseerr" };
+function renderMediaIntro() {
+  const card = $("#mediacard");
+  if (card.dataset.loaded) return;
+  put(card, el("div", { class: "row", style: "justify-content:space-between;align-items:flex-start" },
+    el("div", { style: "flex:1;min-width:240px" }, el("strong", {}, "Find media apps automatically"),
+      el("p", { class: "help", style: "margin:4px 0 0" }, "Looks for Plex, Sonarr, Radarr, Lidarr, Prowlarr, Overseerr, qBittorrent, Deluge and SABnzbd: Docker containers on Unraid and on your VMs, and apps installed in Proxmox VMs and LXCs. Where Jarvis can log in, it reads the API keys for you.")),
+    el("button", { class: "btn primary", onclick: scanMedia }, "Scan for media apps")));
+}
+async function scanMedia() {
+  const card = $("#mediacard");
+  card.dataset.loaded = "1";
+  put(card, el("strong", {}, "Find media apps automatically"), el("p", { class: "help" }, "Scanning containers and guests. This can take up to a minute..."));
+  const r = await api("/api/media-discover", {});
+  if (!r.ok) { put(card, el("strong", {}, "Find media apps automatically"), el("p", { class: "result bad" }, r.error)); return; }
+  const rows = r.found.map(f => {
+    const result = el("div", { class: "fhelp" });
+    let action;
+    if (f.configured) action = el("span", { class: "pill ok" }, "In Jarvis");
+    else if (!f.url) action = el("span", { class: "pill mute", title: f.note }, "Can't reach");
+    else {
+      const needSecret = f.needs && !f.key_found;
+      const secret = needSecret ? el("input", { type: "password", autocomplete: "new-password", style: "width:150px",
+        placeholder: f.needs === "password" ? (f.app === "qbittorrent" ? "password (if any)" : "Web UI password") : f.needs === "token" ? "Plex token" : "API key" }) : null;
+      const user = f.app === "qbittorrent" ? el("input", { type: "text", value: "admin", style: "width:90px", title: "qBittorrent username" }) : null;
+      const add = el("button", { class: "btn primary" }, f.replaces ? "Use this one" : "Add");
+      add.onclick = async () => {
+        if (f.replaces && !confirm(`Jarvis already uses ${f.label} at ${f.replaces}. Switch to ${f.url}?`)) return;
+        add.disabled = true; result.className = "fhelp"; result.textContent = "Adding and testing...";
+        const a = await api("/api/media-discover/add", { id: f.id, secret: secret ? secret.value : "", username: user ? user.value : "" });
+        add.disabled = false;
+        if (!a.ok) { result.className = "fhelp result bad"; result.textContent = a.error; return; }
+        result.className = `fhelp result ${a.message.startsWith("Connected") ? "ok" : "bad"}`;
+        result.textContent = a.message;
+        if (a.message.startsWith("Connected")) { add.replaceWith(el("span", { class: "pill ok" }, "Added")); loadSetup(); }
+      };
+      action = el("div", { class: "row" }, user, secret, add);
+    }
+    const keyInfo = f.key_found ? el("span", { class: "pill ok" }, "key found") : f.needs ? el("span", { class: "pill mute" }, f.needs === "password" ? "needs password" : "needs " + f.needs) : null;
+    return el("tr", {},
+      el("td", {}, el("div", { class: "row", style: "gap:8px;flex-wrap:nowrap" }, svcIcon(APP_TO_SVC[f.app] || f.app, "ico mini"), el("strong", {}, f.label))),
+      el("td", {}, el("div", {}, f.where), f.note ? el("div", { class: "kind" }, f.note) : null),
+      el("td", {}, f.url || "-"), el("td", {}, keyInfo), el("td", {}, action, result));
+  });
+  const fresh = r.found.filter(f => !f.configured && f.url).length;
+  put(card, el("div", { class: "row", style: "justify-content:space-between" }, el("strong", {}, "Find media apps automatically"), el("button", { class: "btn", onclick: scanMedia }, "Scan again")),
+    el("p", { class: "help", style: "margin:4px 0 10px" }, r.found.length ? `Found ${r.found.length}, ${fresh} not in Jarvis yet.` : "No media apps found. Is Proxmox set up, and are your Docker hosts added under VMs / servers or Unraid?"),
+    r.found.length ? el("div", { class: "tablewrap" }, el("table", {}, el("thead", {}, el("tr", {}, ["App", "Where", "Address", "Key", ""].map(h => el("th", {}, h)))), el("tbody", {}, rows))) : null,
+    r.notes.length ? el("details", { style: "margin-top:10px" }, el("summary", { class: "help", style: "cursor:pointer" }, `${r.notes.length} place(s) couldn't be checked`),
+      el("ul", { class: "help" }, r.notes.map(n => el("li", {}, n)))) : null);
+}
+function renderAppearance() {
+  const current = window.JarvisTheme ? JarvisTheme.get() : "system";
+  put($("#appearancecard"), el("strong", {}, "Appearance"),
+    el("p", { class: "help", style: "margin:4px 0 0" }, "Pick a theme. It's saved in this browser."),
+    el("div", { class: "themes" }, (window.JarvisTheme ? JarvisTheme.list : []).map(t =>
+      el("button", { type: "button", class: "theme" + (t.id === current ? " on" : ""), "aria-pressed": String(t.id === current), onclick: () => { JarvisTheme.set(t.id); renderAppearance(); } },
+        el("div", { class: "pv", style: `background:${t.bg}` }, t.panel ? el("i", { style: `background:${t.panel}` }) : null, el("b", { style: `background:${t.accent}` })),
+        el("span", {}, t.name)))));
 }
 async function loadVersion(check = false) {
   const card = $("#versioncard");
@@ -478,20 +707,6 @@ function renderSsh(key) {
     key ? [el("div", { class: "keybox" }, key), copy]
         : el("button", { class: "btn primary", style: "margin-top:10px", onclick: async () => { const r = await api("/api/sshkey", {}); renderSsh(r.public_key); } }, "Create SSH key"));
 }
-function serviceCard(svc, isOpen) {
-  const n = svc.entries.length;
-  const badge = n ? el("span", { class: "pill ok" }, svc.multi ? `${n} set up` : "Set up") : el("span", { class: "pill mute" }, "Not set up");
-  const body = el("div", { class: "body" }, el("p", { class: "help" }, svc.help));
-  if (!svc.editable) body.append(el("p", { class: "result bad" }, "This has several instances in config.yaml. Edit that file by hand."));
-  else {
-    svc.entries.forEach((e, i) => body.append(entryForm(svc, e, i)));
-    if (svc.multi || !n) {
-      const add = el("button", { class: "btn", onclick: () => { add.replaceWith(entryForm(svc, null, null)); } }, n ? `+ Add another ${svc.label}` : `+ Set up ${svc.label}`);
-      body.append(add);
-    }
-  }
-  return el("details", { class: "card svc", "data-id": svc.id, open: isOpen }, el("summary", {}, el("strong", {}, svc.label), badge), body);
-}
 function entryForm(svc, values, index) {
   const inputs = {};
   const fields = svc.fields.map(f => {
@@ -511,8 +726,10 @@ function entryForm(svc, values, index) {
       const set = values && v && v.set;
       input = el("input", { type: "password", autocomplete: "new-password", placeholder: set ? "Saved. Leave blank to keep" : (f.required ? "Required" : "Optional") });
     } else {
-      input = el("input", { type: f.kind === "int" ? "number" : "text", placeholder: f.default != null ? String(f.default) : "" });
-      input.value = v ?? "";
+      input = el("input", { type: f.kind === "int" ? "number" : "text", placeholder: f.default != null ? "e.g. " + String(f.default) : "" });
+      // example addresses are hints, not values: a new form shouldn't come pre-filled with someone else's IP
+      const example = !values && typeof f.default === "string" && /\b192\.168\.1\.\d/.test(f.default);
+      input.value = example ? "" : (v ?? "");
     }
     inputs[f.key] = () => input.value;
     return el("div", { class: "field" }, el("label", {}, f.label + (f.required ? " *" : "")), input, f.help ? el("div", { class: "fhelp" }, f.help) : null);
@@ -534,7 +751,8 @@ function entryForm(svc, values, index) {
     if (!confirm(`Remove this ${svc.label} entry from Jarvis? (Nothing on the service itself is changed.)`)) return;
     await api(`/api/setup/${svc.id}/delete`, { index }); loadSetup();
   } }, "Remove") : null;
-  return el("div", { class: "entry" }, el("div", { class: "fields" }, fields), el("div", { class: "row" }, saveBtn, removeBtn), result);
+  const title = svc.multi ? el("div", { class: "entry-title" }, values ? (values.name || `${svc.label} ${index + 1}`) : `New ${svc.label}`) : null;
+  return el("div", { class: "entry" }, title, el("div", { class: "fields" }, fields), el("div", { class: "row" }, saveBtn, removeBtn), result);
 }
 
 /* ---------- start ---------- */

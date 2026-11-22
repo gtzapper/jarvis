@@ -55,12 +55,86 @@ class JarvisViewModel(app: Application) : AndroidViewModel(app) {
     var loading by mutableStateOf(false)
         private set
 
+    var theme by mutableStateOf(prefs.theme)
+        private set
+
+    // app updates
+    var update by mutableStateOf<AppUpdate?>(null)
+        private set
+    var showUpdateDialog by mutableStateOf(false)
+    var updateStatus by mutableStateOf("")
+        private set
+    var downloadProgress by mutableStateOf<Float?>(null)
+        private set
+    val version: String = BuildConfig.VERSION_NAME
+    private var downloaded: Pair<String, java.io.File>? = null
+
     private var tts: TextToSpeech? = null
     private var ttsReady = false
 
     init {
         // A first start with no password on Jarvis has no cookie, so try once.
         if (prefs.server.isNotEmpty()) refreshAll()
+        if (prefs.autoUpdate && System.currentTimeMillis() - prefs.lastUpdateCheck > 24 * 3600_000L) checkForUpdate(manual = false)
+    }
+
+    fun chooseTheme(id: String) {
+        theme = id
+        prefs.theme = id
+    }
+
+    // ------------------------------------------------------------ app updates
+
+    fun checkForUpdate(manual: Boolean) {
+        updateStatus = "Checking..."
+        viewModelScope.launch {
+            val result = withContext(Dispatchers.IO) { runCatching { Updater.check(version) } }
+            prefs.lastUpdateCheck = System.currentTimeMillis()
+            result.onSuccess { u ->
+                update = u
+                updateStatus = if (u == null) "You're on the latest version ($version)." else "Version ${u.version} is available."
+                // automatic checks don't nag about a version you chose to skip
+                if (u != null && (manual || prefs.skippedVersion != u.version)) showUpdateDialog = true
+            }.onFailure { e ->
+                updateStatus = "Couldn't check for updates: ${e.message ?: e.javaClass.simpleName}"
+            }
+        }
+    }
+
+    fun skipUpdate() {
+        update?.let { prefs.skippedVersion = it.version }
+        showUpdateDialog = false
+    }
+
+    fun installUpdate() {
+        val u = update ?: return
+        showUpdateDialog = false
+        val app = getApplication<Application>()
+        downloaded?.takeIf { it.first == u.version && it.second.exists() }?.let { (_, f) ->
+            // already downloaded: the person just came back from allowing installs
+            updateStatus = if (Updater.install(app, f)) "Opening the installer..." else "Allow Jarvis to install apps, then tap Update again."
+            return
+        }
+        downloadProgress = 0f
+        updateStatus = "Downloading ${u.version}..."
+        viewModelScope.launch {
+            var last = 0f
+            val file = withContext(Dispatchers.IO) {
+                runCatching {
+                    Updater.download(app, u) { p ->
+                        if (p - last >= 0.02f || p >= 1f) { last = p; viewModelScope.launch { downloadProgress = p } }
+                    }
+                }
+            }
+            downloadProgress = null
+            file.onSuccess { f ->
+                downloaded = u.version to f
+                updateStatus = if (Updater.install(app, f)) "Opening the installer..."
+                    else "Allow Jarvis to install apps (the setting that just opened), then tap Update again."
+            }.onFailure { e ->
+                updateStatus = "Update failed: ${e.message ?: e.javaClass.simpleName}"
+            }
+        }
     }
 
     // ------------------------------------------------------------ connecting

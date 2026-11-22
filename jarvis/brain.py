@@ -143,6 +143,9 @@ TOOLS = [
                               "cores": {"type": ["integer", "null"]}, "memory_gb": {"type": ["integer", "null"]},
                               "disk_gb": {"type": ["integer", "null"]}})},
     {"name": "check_vm_setup", "description": "Dry-run check of everything VM creation needs. Changes nothing.", "input_schema": _schema({})},
+    {"name": "discover_media", "description": "Find media apps (Plex, Sonarr, Radarr, Lidarr, Prowlarr, Overseerr, qBittorrent, Deluge, "
+     "SABnzbd) running in Docker on Unraid and VMs, or installed in Proxmox VMs/LXCs, and whether each is already in Jarvis. "
+     "Changes nothing; the user adds them in Setup.", "input_schema": _schema({})},
 ]
 for _t in TOOLS:
     _t["strict"] = True
@@ -155,7 +158,7 @@ PROGRESS = {
     "search_media": "Searching", "add_media": "Adding it", "search_missing": "Starting the search", "list_requests": "Checking requests",
     "decide_requests": "Updating requests", "indexer_status": "Checking indexers", "test_indexers": "Testing indexers",
     "list_hosts": "Listing hosts", "run_command": "Running the command", "list_devices": "Asking pfSense", "create_vm": "Creating the VM",
-    "check_vm_setup": "Checking the VM setup", "check_updates": "Checking for updates", "install_updates": "Preparing updates",
+    "check_vm_setup": "Checking the VM setup", "discover_media": "Looking for media apps", "check_updates": "Checking for updates", "install_updates": "Preparing updates",
     "update_containers": "Checking those containers", "restart_container": "Restarting the container",
     "docker_cleanup": "Cleaning up Docker", "reboot_host": "Rebooting",
 }
@@ -307,6 +310,7 @@ class Brain:
             "list_hosts": lambda: j.hosts(g()),
             "run_command": lambda: j.run(g(host=a["host"], cmd=a["command"])),
             "check_vm_setup": lambda: j.check_vm_setup(g()),
+            "discover_media": lambda: j.discover_media(g()),
             "check_updates": lambda: j.host_updates_check(g(host=a["host"])),
             "install_updates": lambda: j.update_selected(a["host"], a["packages"], a["containers"]),
             "update_containers": lambda: j.update_selected(a["host"], False, True, a["containers"]),
