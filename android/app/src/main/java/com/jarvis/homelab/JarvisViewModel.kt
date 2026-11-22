@@ -181,7 +181,39 @@ class JarvisViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun refreshAll() {
-        loadMode(); loadStatus(); loadActivity(); loadPending()
+        loadMode(); loadStatus(); loadActivity(); loadPending(); loadPlanner()
+        viewModelScope.launch(Dispatchers.IO) { if (prefs.alerts) AlertWorker.syncPlanner(getApplication()) }
+    }
+
+    // ------------------------------------------------------------ planner
+
+    var planner by mutableStateOf<JSONObject?>(null)
+        private set
+
+    fun loadPlanner() = viewModelScope.launch { io { api.get("/api/planner?days=31") }?.let { planner = it } }
+
+    var phoneCalendar by mutableStateOf(prefs.phoneCalendar)
+        private set
+
+    /** Turn the phone-calendar copy on (after the calendar permission is granted) or off. */
+    fun usePhoneCalendar(on: Boolean) {
+        phoneCalendar = on
+        prefs.phoneCalendar = on
+        val app = getApplication<Application>()
+        viewModelScope.launch(Dispatchers.IO) {
+            if (on) {
+                val p = runCatching { api.get("/api/planner?days=${PhoneCalendar.WINDOW_DAYS}") }.getOrNull()
+                val n = p?.optJSONArray("upcoming")?.let { PhoneCalendar.sync(app, it) } ?: 0
+                withContext(Dispatchers.Main) { banner = if (p == null) "Couldn't reach Jarvis to fill the calendar; it will on the next sync." else null
+                    if (p != null) android.widget.Toast.makeText(app, "Added $n items to the Jarvis calendar on this phone", android.widget.Toast.LENGTH_SHORT).show() }
+            } else PhoneCalendar.remove(app)
+        }
+    }
+
+    fun plannerAction(path: String) = viewModelScope.launch {
+        val r = io { api.post(path) }
+        if (r != null && !r.optBoolean("ok", true)) banner = r.optString("error")
+        loadPlanner()
     }
 
     /** Questions waiting for an answer that started elsewhere, e.g. "Hey Jarvis, reboot the NAS" from a listening device. */

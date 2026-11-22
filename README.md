@@ -238,6 +238,37 @@ you> slow the downloads down, I'm gaming
 
 **Cost:** you pay Anthropic per use. A typical question with a couple of tool calls costs a few cents. To make it cheaper, set Effort to `low` in Setup. Model `claude-opus-5-5` is the default. The dashboard's `/api/ai` endpoint shows token usage since start.
 
+## Planner: reminders, notes, events, bills and the daily report
+Tell Jarvis in the chat, by voice, or use the **Planner** page in the dashboard and the app:
+```
+remind me in 20 minutes to check the oven
+remind me to take the bins out every monday at 7pm
+note: the NAS fan is a Noctua NF-A12x25        (find notes nas fan / what did i note about plex)
+add bill rent 1200 on the 1st monthly           (bills / mark rent paid)
+add event dentist on 5 December at 14:30        (agenda / what's coming up 30 days)
+daily report
+```
+With the AI brain on, plain English works too ("remind me the day before the electricity bill is due"), and it can look things up in your notes.
+
+- **Reminders** ring at the time you set; repeating ones (daily, weekdays, weekly, monthly, yearly) move on by themselves.
+- **Bills** remind you 3 days before (you can change it per bill) and on the day. An unpaid bill shows as overdue. **Paid** moves a repeating bill to its next due date.
+- **Events** with a time get a heads-up 30 minutes before.
+- **Daily report** at the time you pick (default 08:00): lab health, recent alerts, today's calendar and bills due this week. Ask for it any time with `daily report`.
+
+**Where they reach you** (Setup → Reminders & daily report, each can be switched off):
+- **ntfy push:** instant, needs Phone alerts (ntfy).
+- **Jarvis app:** reminders are set as exact alarms on the phone, so they ring on the minute. Bill notices and the daily report arrive within 15 minutes.
+- **Listening devices:** speak them aloud, except during quiet hours (default 22:00–07:00).
+
+**Publish to your phone's calendar** (off until you turn it on):
+- **Android with the Jarvis app:** Planner tab → **Show in phone calendar**. It adds a "Jarvis" calendar to your phone's calendar app, filled with the next 90 days of events, bills and reminders, and refreshes on each sync. No link, no extra app, works on your home network or VPN.
+- **iPhone / Mac:** dashboard → Planner → **Publish to phone calendar** → scan the QR code with the camera (or tap **Add to iPhone / Mac Calendar**) and confirm Subscribe.
+- **Android without the app:** turn on Publish, install the free ICSx⁵ app, and scan the QR code. Google Calendar's own "From URL" option fetches from Google's servers, which can't reach your home network.
+
+The link is private: anyone who has it can read your calendar. **New link** replaces it, and switching Publish off stops it working entirely.
+
+Everything is stored in `data/organizer.db` on the Jarvis host.
+
 ## Talking to Jarvis (voice)
 **Android app:** tap the mic and speak. Your words appear as you talk, and the answer is read aloud (Settings → Speak replies). The headset button turns on **hands-free**: after each answer Jarvis listens again, so you can keep talking without touching the phone. Say "stop", "that's all" or "thanks" to end it. If nothing is said for a few seconds, it stops listening until you tap the mic.
 
@@ -255,7 +286,17 @@ Speech is handled on your own network by a **Speaches** server: Whisper turns sp
    Or run Speaches anywhere else, for example `ghcr.io/speaches-ai/speaches:latest-cuda` on a machine with a GPU (it's also in Unraid's Community Apps).
 2. **Setup → Voice (Hey Jarvis):** keep `http://voice:8000` for the bundled one, or enter the other server's address. **Save & test** downloads the speech and voice models the first time (a few hundred MB), then checks a full round trip. The defaults are picked for a CPU: a small, fast English Whisper model and the British `bm_george` voice. Other languages and bigger models are explained under each field.
 3. **Setup → Listening devices → Add device** (for example "Kitchen Pi"). You get an access code, shown once. Each device has its own code; removing the device locks it out. Device codes only work for voice requests, never for the dashboard.
-4. **Install the listener** on a Raspberry Pi or a PC with a microphone and speaker (coming next).
+4. **Install the listener** on the device with the microphone and speaker:
+   - **Raspberry Pi / Debian / Ubuntu:**
+     ```
+     curl -fsSL https://raw.githubusercontent.com/gtzapper/jarvis/main/listener/install-pi.sh -o install-pi.sh
+     sh install-pi.sh
+     ```
+     It asks for Jarvis's address and the access code, then starts on boot. `journalctl -u jarvis-listener -f` shows what it hears.
+   - **Windows** (Python 3.10+ from python.org): download `listener/install-windows.ps1` and run `powershell -ExecutionPolicy Bypass -File install-windows.ps1`. It starts when you sign in.
+   - Pick another mic or speaker: `python jarvis_listener.py devices`, then set `input_device` / `output_device` in the config file it prints.
+
+   Say "Hey Jarvis", wait for the chime, and talk. After an answer it listens about 5 seconds for a follow-up without the wake word. The wake word is detected on the device itself; nothing is sent until you say it. It also speaks reminders and the daily report (Setup → Reminders & daily report).
 
 When a spoken request needs your OK, the device says "That needs your OK" and the question appears in the dashboard chat and the Android app, labelled with the device's name. With ntfy set up, your phone also gets a push alert. Once you tap, the device speaks the result.
 

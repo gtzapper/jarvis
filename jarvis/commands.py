@@ -30,7 +30,14 @@ HELP = """Things I understand:
   slow mode on / slow mode off   throttle downloads (e.g. while gaming or streaming)
   playing / who's watching       current Plex streams
   recent                         recently added to Plex
-  upcoming [14 days]             episodes, movies and albums coming soon
+  upcoming releases [14 days]    episodes, movies and albums coming soon
+  remind me in 20 minutes to check the oven / remind me to pay rent on the 1st every month
+  reminders / cancel reminder 3  your reminders
+  note: the NAS fan is a Noctua  save a note (notes, find notes nas)
+  agenda / bills / what's coming up   events, bills and reminders ahead
+  add bill rent 1200 on the 1st monthly / add event dentist on 5 December at 14:30
+  mark rent paid                 moves a repeating bill to its next due date
+  daily report                   the morning briefing, any time
   search movie dune              look something up (also: show, artist)
   add movie dune                 add it and start searching (also: show, artist)
   search missing movies          ask Radarr/Sonarr/Lidarr to hunt for missing items
@@ -81,6 +88,7 @@ class Assistant:
         self.choose = choose
         self.say = say  # progress updates during long jobs
         self.brain = None
+        self.report_source = None  # the web server plugs in a report that includes live lab status
         from .brain import available, make_brain
         if available(cfg):
             self.brain = make_brain(cfg, self)
@@ -119,7 +127,19 @@ class Assistant:
             (r"^(slow (mode|down)( downloads)?( (?P<state>on|off))?|(?P<fast>full speed|speed up|unthrottle))$", self.slow_mode),
             (r"^(playing|now playing|streams?|who'?s (watching|streaming)( plex)?)$", self.playing),
             (r"^(recent|recently added|what'?s new)$", self.recent),
-            (r"^(upcoming|calendar|what'?s coming( up)?)( (?P<days>\d+) days?)?$", self.upcoming),
+            (r"^(upcoming (releases|episodes|movies)|releases|what'?s coming out)( (?P<days>\d+) days?)?$", self.upcoming),
+            (r"^remind me (?P<rest>.+)$", self.remind),
+            (r"^(reminders|my reminders|list reminders|show reminders)$", self.list_reminders),
+            (r"^(cancel|delete|remove) reminder (?P<n>\d+)$", self.cancel_reminder),
+            (r"^(note|take a note|add a note|add note|make a note)( that)?[:,]? (?P<text>.+)$", self.add_note),
+            (r"^(notes|my notes|show notes|list notes)$", self.list_notes),
+            (r"^((find|search)( my)? notes?( for| about)?|what did i note about) (?P<q>.+)$", self.find_notes),
+            (r"^(agenda|calendar|my calendar|upcoming|what'?s (coming up|on|happening)( this week| today)?|schedule|my schedule)( (?P<days>\d+) days?)?$", self.agenda),
+            (r"^(bills|my bills|upcoming bills|bills due|what bills are due|which bills are due)$", self.bills),
+            (r"^(add|new) bill (?P<rest>.+)$", self.add_bill),
+            (r"^(add|new) event (?P<rest>.+)$", self.add_event),
+            (r"^(mark |i paid |paid )(the )?(?P<name>.+?)( bill)?( as)?( paid)?$", self.mark_paid),
+            (r"^(daily report|morning report|my report|briefing|morning briefing|daily briefing|give me my (daily |morning )?(report|briefing))$", self.daily_report),
             (rf"^(search|hunt) (for )?missing (?P<kind>{KIND_WORDS})$", self.search_missing),
             (rf"^(search|find|look ?up) (for )?(the |a )?(?P<kind>{KIND_WORDS}) (?P<q>.+)$", self.search),
             (rf"^(add|download|get|grab) (the |a )?(?P<kind>{KIND_WORDS}) (?P<q>.+)$", self.add),
@@ -716,6 +736,96 @@ class Assistant:
         return "Scanning " + ", ".join(l["title"] for l in libs) + "."
 
     # ------------------------------------------------------------ *arr
+
+    # ------------------------------------------------------------ planner: reminders, notes, calendar
+
+    def remind(self, m) -> str:
+        from . import organizer as O
+        when, repeat, what = O.parse_when(m.m["rest"])  # m.m keeps the original case of what to remember
+        if not when:
+            return "When should I remind you? For example: remind me in 20 minutes to check the oven, or remind me tomorrow at 9 to call mum."
+        what = re.sub(r"^(to|that|about)\s+", "", what, flags=re.I) or "Reminder"
+        rid = O.add_reminder(what, when, repeat)
+        rep = f", repeating {repeat}" if repeat else ""
+        return f"OK, I'll remind you to {what} {when:%a %d %b at %H:%M}{rep}. (Reminder {rid})"
+
+    def list_reminders(self, m) -> str:
+        from datetime import datetime
+        from . import organizer as O
+        rs = O.reminders()
+        if not rs:
+            return "No reminders set."
+        return "Reminders:\n" + "\n".join(f"  {r['id']}. {r['text']}: {datetime.fromisoformat(r['due']):%a %d %b %H:%M}"
+                                          + (f" ({r['repeat']})" if r["repeat"] else "") for r in rs)
+
+    def cancel_reminder(self, m) -> str:
+        from . import organizer as O
+        return "Cancelled." if O.cancel_reminder(int(m["n"])) else f"There's no reminder {m['n']}."
+
+    def add_note(self, m) -> str:
+        from . import organizer as O
+        nid = O.add_note(m.m["text"])
+        return f"Noted. (Note {nid})"
+
+    def list_notes(self, m) -> str:
+        from . import organizer as O
+        ns = O.notes(limit=15)
+        return ("Latest notes:\n" + "\n".join(f"  {n['id']}. {n['text']}" for n in ns)) if ns else "No notes yet. Say: note, then what to remember."
+
+    def find_notes(self, m) -> str:
+        from . import organizer as O
+        ns = O.notes(m.m["q"], limit=8)
+        return ("\n".join(f"  {n['id']}. {n['text']} ({n['created'][:10]})" for n in ns)) if ns else f"Nothing in your notes about {m.m['q']}."
+
+    def agenda(self, m) -> str:
+        from . import organizer as O
+        days = int(m["days"] or 7)
+        items = O.upcoming(days)
+        if not items:
+            return f"Nothing in the next {days} days."
+        return f"Next {days} days:\n" + "\n".join("  " + O.describe(i) for i in items)
+
+    def bills(self, m) -> str:
+        from . import organizer as O
+        items = [i for i in O.upcoming(31) if i["kind"] == "bill"]
+        if not items:
+            return "No bills due in the next month."
+        return "Bills:\n" + "\n".join("  " + O.describe(i).replace("Bill: ", "") for i in items)
+
+    def add_bill(self, m) -> str:
+        from . import organizer as O
+        rest = m.m["rest"]
+        amt = re.search(r"(?:[$£€₹]\s?)?(\d[\d,]*(?:\.\d{1,2})?)(?!\s*(?:st|nd|rd|th|am|pm|:|-))", rest)
+        amount = float(amt.group(1).replace(",", "")) if amt else None
+        if amt:
+            rest = rest.replace(amt.group(0), " ", 1)
+        when, repeat, title = O.parse_when(re.sub(r"\bdue\b", " ", rest, flags=re.I))
+        title = re.sub(r"\b(for|of)\s*$", "", title).strip() or "Bill"
+        if not when:
+            return "When is it due? For example: add bill rent 1200 on the 1st monthly."
+        eid = O.add_event(title, when.date(), "bill", amount=amount, repeat=repeat)
+        return f"Added bill {title}" + (f" ({O.money(amount)})" if amount else "") + f", due {when:%a %d %b}" + (f", {repeat}" if repeat else "") + \
+            f". I'll remind you 3 days before and on the day. (Bill {eid})"
+
+    def add_event(self, m) -> str:
+        from . import organizer as O
+        when, repeat, title = O.parse_when(m.m["rest"])
+        if not when:
+            return "When is it? For example: add event dentist on 5 December at 14:30."
+        timed = bool(re.search(r"\d(:\d\d)?\s*(am|pm)|\d:\d\d|\bat\b|morning|evening|tonight", m.m["rest"], re.I))
+        eid = O.add_event(title or "Event", when.date(), "event", time=when.strftime("%H:%M") if timed else "", repeat=repeat)
+        return f"Added {title or 'the event'} on {when:%a %d %b}" + (f" at {when:%H:%M}" if timed else "") + (f", {repeat}" if repeat else "") + f". (Event {eid})"
+
+    def mark_paid(self, m) -> str:
+        from . import organizer as O
+        try:
+            return O.mark_paid(m.m["name"].strip())
+        except ValueError as e:
+            return str(e)
+
+    def daily_report(self, m) -> str:
+        from . import organizer as O
+        return self.report_source() if self.report_source else O.daily_report()
 
     def upcoming(self, m) -> str:
         days = int(m["days"] or 7)

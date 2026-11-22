@@ -47,6 +47,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
@@ -126,12 +127,12 @@ fun JarvisApp(vm: JarvisViewModel, tab: MutableState<String>) {
         bottomBar = {
             NavigationBar(containerColor = MaterialTheme.colorScheme.surface) {
                 listOf(
-                    Triple("chat", "Chat", ChatIcon), Triple("status", "Status", Icons.Filled.Home),
+                    Triple("chat", "Chat", ChatIcon), Triple("planner", "Planner", Icons.Filled.DateRange), Triple("status", "Status", Icons.Filled.Home),
                     Triple("activity", "Activity", Icons.AutoMirrored.Filled.List), Triple("settings", "Settings", Icons.Filled.Settings),
                 ).forEach { (key, label, icon) ->
                     NavigationBarItem(
                         selected = tab.value == key,
-                        onClick = { tab.value = key; if (key == "activity") vm.loadActivity(); if (key == "status") vm.loadStatus() },
+                        onClick = { tab.value = key; if (key == "activity") vm.loadActivity(); if (key == "status") vm.loadStatus(); if (key == "planner") vm.loadPlanner() },
                         icon = { Icon(icon, contentDescription = null) },
                         label = { Text(label) },
                     )
@@ -149,6 +150,7 @@ fun JarvisApp(vm: JarvisViewModel, tab: MutableState<String>) {
             }
             when (tab.value) {
                 "status" -> StatusScreen(vm)
+                "planner" -> PlannerScreen(vm)
                 "activity" -> ActivityScreen(vm)
                 "settings" -> SettingsScreen(vm)
                 else -> ChatScreen(vm)
@@ -428,6 +430,128 @@ fun SystemCard(r: JSONObject) {
                 if (n > 3) Text(if (open) "Show less" else "Show ${n - 3} more", fontSize = 13.sp, color = c.primary, modifier = Modifier.padding(top = 4.dp))
             }
         }
+    }
+}
+
+// ---------------------------------------------------------------- planner
+
+@Composable
+fun PlannerScreen(vm: JarvisViewModel) {
+    val p = vm.planner
+    val c = MaterialTheme.colorScheme
+    var showNotes by rememberSaveable { mutableStateOf(false) }
+    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        item {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("Planner", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                    Text("Add things by telling Jarvis: \"remind me tomorrow at 9 to call mum\", \"add bill rent 1200 on the 1st monthly\", \"note: ...\"",
+                        fontSize = 12.sp, color = c.onSurfaceVariant)
+                }
+                IconButton({ vm.loadPlanner() }) { Icon(Icons.Filled.Refresh, "Reload") }
+            }
+        }
+        item { PhoneCalendarRow(vm) }
+        item {
+            SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+                SegmentedButton(selected = !showNotes, onClick = { showNotes = false }, shape = SegmentedButtonDefaults.itemShape(0, 2)) { Text("Coming up") }
+                SegmentedButton(selected = showNotes, onClick = { showNotes = true }, shape = SegmentedButtonDefaults.itemShape(1, 2)) { Text("Notes") }
+            }
+        }
+        if (p == null) {
+            item { Text("Loading...", color = c.onSurfaceVariant) }
+            return@LazyColumn
+        }
+        if (showNotes) {
+            val notes = p.optJSONArray("notes")
+            val n = notes?.length() ?: 0
+            if (n == 0) item { Text("No notes yet. Say \"note:\" and what to remember.", color = c.onSurfaceVariant) }
+            items((0 until n).map { notes!!.getJSONObject(it) }) { note ->
+                Card(colors = CardDefaults.cardColors(containerColor = c.surface), border = androidx.compose.foundation.BorderStroke(1.dp, c.outline)) {
+                    Row(Modifier.padding(12.dp), verticalAlignment = Alignment.Top) {
+                        Column(Modifier.weight(1f)) {
+                            Text(note.optString("text"), fontSize = 15.sp)
+                            Text(note.optString("created").replace("T", " "), fontSize = 11.sp, color = c.onSurfaceVariant)
+                        }
+                        TextButton({ vm.plannerAction("/api/planner/note/${note.optInt("id")}/delete") }) { Text("Delete") }
+                    }
+                }
+            }
+        } else {
+            val up = p.optJSONArray("upcoming")
+            val list = (0 until (up?.length() ?: 0)).map { up!!.getJSONObject(it) }
+            if (list.isEmpty()) item { Text("Nothing in the next month.", color = c.onSurfaceVariant) }
+            var lastHead = ""
+            for (it in list) {
+                val head = if (it.optBoolean("overdue")) "Overdue" else it.optString("date")
+                if (head != lastHead) {
+                    lastHead = head
+                    item { Text(dayLabel(head).uppercase(), fontSize = 12.sp, letterSpacing = 0.5.sp, color = c.onSurfaceVariant,
+                        fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 8.dp)) }
+                }
+                item { PlannerItem(vm, it) }
+            }
+        }
+    }
+}
+
+@Composable
+fun PhoneCalendarRow(vm: JarvisViewModel) {
+    val context = LocalContext.current
+    val ask = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { granted ->
+        if (granted.values.all { it }) vm.usePhoneCalendar(true)
+        else android.widget.Toast.makeText(context, "Jarvis needs calendar access to add your events", android.widget.Toast.LENGTH_SHORT).show()
+    }
+    Row(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surface, RoundedCornerShape(12.dp))
+        .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(12.dp)).padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Text("Show in phone calendar", fontWeight = FontWeight.SemiBold)
+            Text("Adds a Jarvis calendar to this phone's calendar app with the next 90 days of events, bills and reminders. Updates on each sync.",
+                fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        Switch(vm.phoneCalendar, { on ->
+            if (!on) vm.usePhoneCalendar(false)
+            else if (PhoneCalendar.allowed(context)) vm.usePhoneCalendar(true)
+            else ask.launch(arrayOf(Manifest.permission.READ_CALENDAR, Manifest.permission.WRITE_CALENDAR))
+        })
+    }
+}
+
+private fun dayLabel(iso: String): String {
+    if (iso == "Overdue") return iso
+    return runCatching {
+        val d = java.time.LocalDate.parse(iso)
+        val today = java.time.LocalDate.now()
+        when (d) {
+            today -> "Today"
+            today.plusDays(1) -> "Tomorrow"
+            else -> d.format(java.time.format.DateTimeFormatter.ofPattern("EEEE d MMM"))
+        }
+    }.getOrDefault(iso)
+}
+
+@Composable
+fun PlannerItem(vm: JarvisViewModel, it: JSONObject) {
+    val c = MaterialTheme.colorScheme
+    val kind = it.optString("kind")
+    val color = when {
+        it.optBoolean("overdue") -> c.error
+        kind == "bill" -> c.tertiary
+        kind == "reminder" -> Color(0xFF22C55E)
+        else -> c.primary
+    }
+    Row(Modifier.fillMaxWidth().background(c.surface, RoundedCornerShape(12.dp)).border(1.dp, c.outline, RoundedCornerShape(12.dp))
+        .padding(horizontal = 12.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+        Box(Modifier.size(10.dp).background(color, CircleShape))
+        Spacer(Modifier.width(10.dp))
+        Column(Modifier.weight(1f)) {
+            val amount = if (it.isNull("amount")) "" else " · " + it.optDouble("amount").let { a -> if (a % 1.0 == 0.0) "%,.0f".format(a) else "%,.2f".format(a) }
+            Text(it.optString("title") + amount, fontSize = 15.sp)
+            val meta = listOfNotNull(kind.replaceFirstChar { ch -> ch.uppercase() }, it.optString("time").ifEmpty { null },
+                it.optString("repeat").ifEmpty { null }?.let { r -> "repeats $r" }).joinToString(" · ")
+            Text(meta, fontSize = 12.sp, color = c.onSurfaceVariant)
+        }
+        if (kind == "bill") TextButton({ vm.plannerAction("/api/planner/event/${it.optInt("id")}/paid") }) { Text("Paid") }
     }
 }
 

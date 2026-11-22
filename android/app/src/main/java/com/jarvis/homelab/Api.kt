@@ -26,6 +26,18 @@ class Prefs(context: Context) {
     var knownProblems: Set<String>?
         get() = sp.getStringSet("known_problems", null)
         set(v) = sp.edit().putStringSet("known_problems", v).apply()
+    var phoneCalendar: Boolean
+        get() = sp.getBoolean("phone_calendar", false)
+        set(v) = sp.edit().putBoolean("phone_calendar", v).apply()
+    var outboxLast: Int
+        get() = sp.getInt("outbox_last", -1)
+        set(v) = sp.edit().putInt("outbox_last", v).apply()
+    var alarmCodes: Set<Int>
+        get() = (sp.getStringSet("alarm_codes", emptySet()) ?: emptySet()).mapNotNull { it.toIntOrNull() }.toSet()
+        set(v) = sp.edit().putStringSet("alarm_codes", v.map { it.toString() }.toSet()).apply()
+    var recentReminders: Set<String>
+        get() = sp.getStringSet("recent_reminders", emptySet()) ?: emptySet()
+        set(v) = sp.edit().putStringSet("recent_reminders", v).apply()
     var handsFree: Boolean
         get() = sp.getBoolean("hands_free", false)
         set(v) = sp.edit().putBoolean("hands_free", v).apply()

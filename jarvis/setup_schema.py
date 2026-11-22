@@ -230,6 +230,16 @@ SERVICES: list[Service] = [
                     Field("api_key_env", "Voice server API key", "secret", env="VOICE_API_KEY",
                           help="Only if you set API_KEY on the Speaches container"),
                     Field("enabled", "Enabled", "bool", default=True)]),
+    Service("planner", "Reminders & daily report", "Alerts", ("planner",),
+            help="How reminders, bill notices and the daily report reach you. ntfy needs Phone alerts (ntfy) set up; the Jarvis "
+                 "app shows them as notifications (exact for reminders, otherwise within 15 minutes); listening devices "
+                 "speak them. Ask for the report any time: 'daily report'.",
+            fields=[Field("ntfy", "Send by ntfy push", "bool", default=True),
+                    Field("app", "Show in the Jarvis app", "bool", default=True),
+                    Field("spoken", "Speak on listening devices", "bool", default=True),
+                    Field("report_time", "Daily report time", default="08:00", help="24-hour time, e.g. 07:30. Blank = no daily report"),
+                    Field("quiet_hours", "Quiet hours for spoken messages", default="22:00-07:00",
+                          help="Listening devices stay silent in this window (reminders still go to your phone). Blank = never quiet")]),
     Service("notify", "Phone alerts (ntfy)", "Alerts", ("notify",), test=_t_notify,
             help="Install the ntfy app, subscribe to a long random topic, use https://ntfy.sh/<topic>.",
             fields=[Field("ntfy_url_env", "ntfy URL", "secret", env="NTFY_URL", required=True)]),

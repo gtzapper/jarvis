@@ -137,6 +137,29 @@ dialog.sheet::backdrop { background: rgba(0,0,0,.45); backdrop-filter: blur(2px)
 .voicebar #voicestate { flex: 1; }
 .voicebar .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--accent); animation: pulse 1.2s infinite; }
 @keyframes pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: .35; transform: scale(.7); } }
+.planner-grid { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 12px; margin-top: 12px; }
+.qa-tabs { display: inline-flex; border: 1px solid var(--line); border-radius: 99px; padding: 2px; margin-bottom: 10px; }
+.qa-tabs button { border: 0; background: none; padding: 5px 13px; border-radius: 99px; cursor: pointer; color: var(--muted); font-size: 13px; }
+.qa-tabs button.on { background: var(--accent); color: var(--accent-text); }
+.qa-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.qa-row input, .qa-row select { width: auto; flex: 1 1 140px; }
+.qa-row input[type=date], .qa-row input[type=time] { flex: 0 1 150px; }
+.month { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; margin-top: 10px; }
+.month .dow { text-align: center; font-size: 11px; color: var(--muted); padding-bottom: 2px; }
+.month .day { min-height: 54px; border: 1px solid var(--line); border-radius: 8px; padding: 4px 5px; font-size: 12px; cursor: pointer; background: var(--panel2); overflow: hidden; }
+.month .day.other { opacity: .45; }
+.month .day.today { border-color: var(--accent); }
+.month .day.sel { background: var(--accent-soft); border-color: var(--accent); }
+.month .day .dots { display: flex; gap: 3px; flex-wrap: wrap; margin-top: 4px; }
+.month .day .dots i { width: 7px; height: 7px; border-radius: 50%; }
+.k-event { background: var(--accent); } .k-bill { background: var(--warn); } .k-reminder { background: var(--ok); } .k-overdue { background: var(--crit); }
+.item { display: flex; gap: 10px; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--line); }
+.item:last-child { border-bottom: 0; }
+.item .dot { width: 9px; height: 9px; border-radius: 50%; flex: none; }
+.item .grow { flex: 1; min-width: 0; }
+.item .when { color: var(--muted); font-size: 12px; }
+.item .acts { display: flex; gap: 6px; }
+.day-head { font-size: 12px; text-transform: uppercase; letter-spacing: .5px; color: var(--muted); margin: 12px 0 2px; }
 .composer { display: flex; gap: 8px; }
 .composer input { flex: 1; min-width: 0; padding: 11px 13px; border-radius: 10px; border: 1px solid var(--line); background: var(--panel); }
 .composer .btn { flex: none; }
@@ -183,6 +206,8 @@ select.select, input[type=text], input[type=password], input[type=number], input
   .setup-tools input[type=search] { max-width: none; }
   .tabs { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; width: 100%; }
   .tabs button { flex: none; }
+  .planner-grid { grid-template-columns: 1fr; }
+  .month .day { min-height: 40px; padding: 3px; }
   .msg { max-width: 92%; }
   .grid { grid-template-columns: 1fr; }
 }
@@ -194,6 +219,7 @@ select.select, input[type=text], input[type=password], input[type=number], input
     <div class="brand">J<span>A</span>RVIS</div>
     <button data-view="dashboard" class="active"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 13h8V3H3v10zm0 8h8v-6H3v6zm10 0h8V11h-8v10zm0-18v6h8V3h-8z"/></svg><span>Dashboard</span></button>
     <button data-view="chat"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h16v12H7l-3 3V4z"/></svg><span>Chat</span></button>
+    <button data-view="planner"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16v14H4zM4 10h16M8 3v5M16 3v5"/></svg><span>Planner</span></button>
     <button data-view="devices"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v10H4zM2 19h20M9 15v4M15 15v4"/></svg><span>Devices</span></button>
     <button data-view="activity"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg><span>Activity</span></button>
     <button data-view="setup"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg><span>Setup</span></button>
@@ -228,6 +254,22 @@ select.select, input[type=text], input[type=password], input[type=number], input
           <button type="button" class="btn icon" id="handsfree" title="Hands-free: after each answer, Jarvis listens again" aria-label="Hands-free conversation" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 14v-2a9 9 0 0 1 18 0v2M3 14a2 2 0 0 1 2-2h1v7H5a2 2 0 0 1-2-2zM21 14a2 2 0 0 0-2-2h-1v7h1a2 2 0 0 0 2-2z"/></svg></button>
           <button class="btn primary">Send</button>
         </form>
+      </div>
+    </section>
+
+    <section id="planner" hidden>
+      <h1>Planner</h1>
+      <p class="sub">Reminders, events, bills and notes. You can also just tell Jarvis: "remind me tomorrow at 9 to call mum", "add bill rent 1200 on the 1st monthly", "note: ...".</p>
+      <div class="card" id="quickadd"></div>
+      <div class="planner-grid">
+        <div>
+          <div class="card" id="monthcard"></div>
+          <div class="card" id="upcomingcard" style="margin-top:12px"></div>
+        </div>
+        <div>
+          <div class="card" id="notescard"></div>
+          <div class="card" id="feedcard" style="margin-top:12px"></div>
+        </div>
       </div>
     </section>
 
@@ -298,7 +340,7 @@ function show(view) {
   current = view;
   document.querySelectorAll("nav button[data-view]").forEach(b => b.classList.toggle("active", b.dataset.view === view));
   document.querySelectorAll("main > section").forEach(s => s.hidden = s.id !== view);
-  ({ dashboard: loadStatus, devices: loadDevices, activity: loadActivity, setup: loadSetup, chat: () => { $("#input").focus(); loadPending(); } })[view]();
+  ({ dashboard: loadStatus, devices: loadDevices, planner: loadPlanner, activity: loadActivity, setup: loadSetup, chat: () => { $("#input").focus(); loadPending(); } })[view]();
   try { localStorage.setItem("jarvis.view", view); } catch {}
 }
 document.querySelectorAll("nav button[data-view]").forEach(b => b.onclick = () => show(b.dataset.view));
@@ -707,6 +749,133 @@ async function loadDevicesCard(newDevice) {
         el("button", { class: "more", onclick: async () => { if (confirm(`Remove ${x.name}? It won't be able to talk to Jarvis any more.`)) { await api(`/api/voice/devices/${x.id}/delete`, {}); loadDevicesCard(); } } }, "Remove")))) : null,
     el("div", { class: "row" }, name, add), msg, fresh);
 }
+/* ---------- planner ---------- */
+let plan = null, planType = "reminder", planMonth = null, planDay = null;
+const pad2 = n => String(n).padStart(2, "0");
+const isoDay = d => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+async function loadPlanner() {
+  plan = await api("/api/planner?days=120");
+  if (!planMonth) { const t = new Date(); planMonth = new Date(t.getFullYear(), t.getMonth(), 1); }
+  renderQuickAdd(); renderMonth(); renderUpcoming(); renderNotes(); renderFeed();
+}
+async function planPost(path, body) {
+  const r = await api(path, body || {});
+  if (!r.ok) { alert(r.error); return false; }
+  await loadPlanner();
+  return true;
+}
+function renderQuickAdd() {
+  const card = $("#quickadd");
+  const tomorrow = new Date(Date.now() + 864e5);
+  const tabs = el("div", { class: "qa-tabs" }, [["reminder", "Reminder"], ["event", "Event"], ["bill", "Bill"], ["note", "Note"]].map(([k, l]) =>
+    el("button", { type: "button", class: planType === k ? "on" : "", onclick: () => { planType = k; renderQuickAdd(); } }, l)));
+  const text = el("input", { type: "text", placeholder: { reminder: "What to remind you about", event: "Event, e.g. Dentist", bill: "Bill, e.g. Rent", note: "Write a note..." }[planType] });
+  const day = el("input", { type: "date", value: isoDay(planType === "reminder" ? tomorrow : new Date()) });
+  const time = el("input", { type: "time", value: planType === "reminder" ? "09:00" : "" });
+  const amount = el("input", { type: "number", step: "0.01", min: "0", placeholder: "Amount" });
+  const repeat = el("select", { class: "select" }, plan.repeats.map(r => el("option", { value: r }, r ? "Repeats " + r : "Doesn't repeat")));
+  if (planType === "bill") repeat.value = "monthly";
+  const remind = el("input", { type: "number", min: "0", value: "3", title: "Remind this many days before", style: "flex:0 1 90px" });
+  const save = el("button", { class: "btn primary" }, "Add");
+  save.onclick = async () => {
+    if (!text.value.trim()) { text.focus(); return; }
+    let ok;
+    if (planType === "note") ok = await planPost("/api/planner/note", { text: text.value });
+    else if (planType === "reminder") ok = await planPost("/api/planner/reminder", { text: text.value, due: `${day.value}T${time.value || "09:00"}`, repeat: repeat.value });
+    else ok = await planPost("/api/planner/event", { title: text.value, kind: planType, day: day.value, time: planType === "event" ? time.value : "", amount: amount.value, repeat: repeat.value, remind_days: planType === "bill" ? remind.value : "" });
+    if (ok) text.value = "";
+  };
+  text.onkeydown = e => { if (e.key === "Enter") save.click(); };
+  const fields = planType === "note" ? [text] : planType === "bill" ? [text, amount, day, repeat, el("span", { class: "help" }, "remind"), remind, el("span", { class: "help" }, "days before")]
+    : [text, day, time, repeat];
+  put(card, tabs, el("div", { class: "qa-row" }, fields, save));
+}
+function itemsOn(dayIso) { return plan.upcoming.filter(i => i.date === dayIso); }
+function renderMonth() {
+  const card = $("#monthcard");
+  const first = planMonth, start = new Date(first);
+  start.setDate(1 - ((first.getDay() + 6) % 7));  // weeks start on Monday
+  const today = isoDay(new Date());
+  const cells = [];
+  for (let i = 0; i < 42; i++) {
+    const d = new Date(start); d.setDate(start.getDate() + i);
+    const iso = isoDay(d), its = itemsOn(iso);
+    cells.push(el("div", { class: `day${d.getMonth() !== first.getMonth() ? " other" : ""}${iso === today ? " today" : ""}${iso === planDay ? " sel" : ""}`,
+      onclick: () => { planDay = planDay === iso ? null : iso; renderMonth(); renderUpcoming(); }, title: its.map(i => i.text).join("\n") },
+      String(d.getDate()), el("div", { class: "dots" }, its.slice(0, 6).map(i => el("i", { class: "k-" + (i.overdue ? "overdue" : i.kind) })))));
+  }
+  const nav = n => { planMonth = new Date(planMonth.getFullYear(), planMonth.getMonth() + n, 1); renderMonth(); };
+  put(card, el("div", { class: "row", style: "justify-content:space-between" },
+      el("strong", {}, first.toLocaleString(undefined, { month: "long", year: "numeric" })),
+      el("div", { class: "row" }, el("button", { class: "btn", onclick: () => nav(-1) }, "‹"), el("button", { class: "btn", onclick: () => { const t = new Date(); planMonth = new Date(t.getFullYear(), t.getMonth(), 1); planDay = null; renderMonth(); renderUpcoming(); } }, "Today"), el("button", { class: "btn", onclick: () => nav(1) }, "›"))),
+    el("div", { class: "month" }, ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map(x => el("div", { class: "dow" }, x)), cells),
+    el("div", { class: "help", style: "margin-top:8px;display:flex;gap:12px;flex-wrap:wrap" },
+      [["event", "Event"], ["bill", "Bill"], ["reminder", "Reminder"], ["overdue", "Overdue"]].map(([k, l]) => el("span", {}, el("i", { class: "k-" + k, style: "display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:5px" }), l))));
+}
+function renderUpcoming() {
+  const card = $("#upcomingcard");
+  const list = planDay ? itemsOn(planDay) : plan.upcoming.filter(i => i.date <= isoDay(new Date(Date.now() + 31 * 864e5)));
+  const groups = {};
+  list.forEach(i => (groups[i.overdue ? "Overdue" : i.date] ||= []).push(i));
+  const label = k => k === "Overdue" ? k : new Date(k + "T00:00").toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "short" });
+  put(card, el("div", { class: "row", style: "justify-content:space-between" }, el("strong", {}, planDay ? label(planDay) : "Next 31 days"),
+      planDay ? el("button", { class: "btn", onclick: () => { planDay = null; renderMonth(); renderUpcoming(); } }, "Show all") : null),
+    list.length ? Object.entries(groups).map(([k, its]) => [el("div", { class: "day-head" }, label(k)), its.map(i =>
+      el("div", { class: "item" }, el("span", { class: "dot k-" + (i.overdue ? "overdue" : i.kind) }),
+        el("div", { class: "grow" }, el("div", {}, i.title + (i.amount ? ` · ${Number(i.amount).toFixed(i.amount % 1 ? 2 : 0)}` : "")),
+          el("div", { class: "when" }, [i.kind === "event" ? "Event" : i.kind === "bill" ? "Bill" : "Reminder", i.time, i.repeat ? "repeats " + i.repeat : null].filter(Boolean).join(" · "))),
+        el("div", { class: "acts" },
+          i.kind === "bill" ? el("button", { class: "btn", onclick: () => planPost(`/api/planner/event/${i.id}/paid`) }, "Paid") : null,
+          el("button", { class: "btn", title: "Delete", onclick: () => confirm(`Delete "${i.title}"${i.repeat ? " (all repeats)" : ""}?`) && planPost(`/api/planner/${i.kind === "reminder" ? "reminder" : "event"}/${i.id}/delete`) }, "×"))))])
+      : el("p", { class: "help" }, planDay ? "Nothing on this day." : "Nothing coming up. Add something above, or tell Jarvis."));
+}
+function renderNotes() {
+  const card = $("#notescard");
+  const search = el("input", { type: "search", placeholder: "Search notes", value: card.dataset.q || "" });
+  const listBox = el("div");
+  const draw = () => {
+    const q = search.value.trim().toLowerCase(); card.dataset.q = search.value;
+    const ns = plan.notes.filter(n => !q || n.text.toLowerCase().includes(q));
+    put(listBox, ns.length ? ns.slice(0, 100).map(n => el("div", { class: "item" }, el("div", { class: "grow" }, el("div", { style: "white-space:pre-wrap;word-break:break-word" }, n.text), el("div", { class: "when" }, n.created.replace("T", " "))),
+      el("div", { class: "acts" }, el("button", { class: "btn", title: "Delete", onclick: () => confirm("Delete this note?") && planPost(`/api/planner/note/${n.id}/delete`) }, "×"))))
+      : el("p", { class: "help" }, q ? "No matching notes." : "No notes yet."));
+  };
+  search.oninput = draw;
+  put(card, el("strong", {}, `Notes (${plan.notes.length})`), el("div", { style: "margin:8px 0" }, search), listBox);
+  draw();
+}
+function renderFeed() {
+  const card = $("#feedcard");
+  const url = location.origin + plan.feed;
+  const webcal = "webcal://" + url.split("://")[1];
+  const toggle = el("input", { type: "checkbox" });
+  toggle.checked = plan.feed_enabled;
+  toggle.onchange = () => planPost("/api/planner/feed", { enabled: toggle.checked });
+  const head = [el("div", { class: "row", style: "justify-content:space-between" }, el("strong", {}, "Publish to phone calendar"),
+      el("label", { class: "row", style: "gap:6px;cursor:pointer" }, toggle, el("span", { class: "help" }, plan.feed_enabled ? "On" : "Off"))),
+    el("p", { class: "help", style: "margin:4px 0 8px" }, "Shows your events, bills and reminders in your phone's own calendar app. It updates by itself whenever the phone can reach Jarvis (home Wi-Fi or VPN).")];
+  if (!plan.feed_enabled) {
+    put(card, head, el("p", { class: "help" }, "Off: the calendar link doesn't work for anyone. Using the Jarvis Android app? Turn on Planner > Show in phone calendar there instead; no link needed."));
+    return;
+  }
+  const copy = el("button", { class: "btn" }, "Copy link");
+  copy.onclick = async () => { try { await navigator.clipboard.writeText(url); copy.textContent = "Copied"; } catch { copy.textContent = "Select and copy it manually"; } };
+  put(card, head,
+    el("div", { class: "row", style: "align-items:flex-start;gap:14px;flex-wrap:wrap" },
+      el("img", { src: "/api/planner/feed/qr.svg?webcal=1&t=" + Date.now(), alt: "QR code of the calendar link", width: "150", height: "150", style: "border-radius:8px;background:#fff" }),
+      el("div", { style: "flex:1;min-width:180px" },
+        el("p", { class: "help", style: "margin:0 0 8px" }, "Scan with your phone's camera, or:"),
+        el("div", { class: "row" }, el("a", { class: "btn primary", href: webcal, style: "text-decoration:none" }, "Add to iPhone / Mac Calendar"), copy),
+        el("div", { class: "keybox", style: "margin-top:8px" }, url))),
+    el("details", { style: "margin-top:10px" }, el("summary", { class: "help", style: "cursor:pointer" }, "Step by step"),
+      el("ul", { class: "help", style: "padding-left:18px" },
+        el("li", {}, "iPhone: scan the code (or tap the button on the phone) and confirm Subscribe. Or Settings > Calendar > Accounts > Add Account > Other > Add Subscribed Calendar and paste the link."),
+        el("li", {}, "Android with the Jarvis app: Planner tab > Show in phone calendar. Easiest, no link needed."),
+        el("li", {}, "Android without the app: install the free ICSx⁵ app, then scan the code. (Google Calendar's own \"From URL\" fetches from Google's servers, which can't reach your home network.)"))),
+    el("div", { class: "row", style: "margin-top:8px" }, el("span", { class: "help" }, "Anyone with this link can read your calendar."),
+      el("button", { class: "btn", onclick: () => confirm("Make a new link? The old one stops working; add the new one on your phone.") && planPost("/api/planner/feed/reset") }, "New link")));
+}
+
 function renderAppearance() {
   const current = window.JarvisTheme ? JarvisTheme.get() : "system";
   put($("#appearancecard"), el("strong", {}, "Appearance"),

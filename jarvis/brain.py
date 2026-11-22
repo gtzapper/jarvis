@@ -59,8 +59,12 @@ MODE_NOTES = {
 
 
 def system_prompt(cfg: dict, local: bool = False) -> str:
+    from datetime import datetime
     from . import modes
-    return SYSTEM + ("\n\n" + LOCAL_EXTRA if local else "") + "\n\n" + MODE_NOTES[modes.get(cfg)]
+    now = datetime.now()
+    return (SYSTEM + ("\n\n" + LOCAL_EXTRA if local else "") + "\n\n" + MODE_NOTES[modes.get(cfg)] +
+            f"\n\nCurrent local date and time: {now:%A %Y-%m-%d %H:%M}. Use it to turn 'tomorrow', 'next Friday' or "
+            "'in 2 hours' into exact dates for reminders and the calendar.")
 
 
 LOCAL_EXTRA = """Tool calls: use only the tools provided, with exactly the parameters in their schema. Use null for optional values \
@@ -143,6 +147,31 @@ TOOLS = [
                               "cores": {"type": ["integer", "null"]}, "memory_gb": {"type": ["integer", "null"]},
                               "disk_gb": {"type": ["integer", "null"]}})},
     {"name": "check_vm_setup", "description": "Dry-run check of everything VM creation needs. Changes nothing.", "input_schema": _schema({})},
+    {"name": "add_reminder", "description": "Set a reminder. Work out the exact local date and time from what the user said and the "
+     "current time in the system prompt. repeat: '' (once), daily, weekdays, weekly, monthly or yearly.",
+     "input_schema": _schema({"text": {"type": "string", "description": "What to remind them about, short"},
+                              "when": {"type": "string", "description": "Local date and time, YYYY-MM-DDTHH:MM"},
+                              "repeat": {"type": "string", "enum": ["", "daily", "weekdays", "weekly", "monthly", "yearly"]}})},
+    {"name": "list_reminders", "description": "The user's reminders, numbered by id.", "input_schema": _schema({})},
+    {"name": "cancel_reminder", "description": "Cancel a reminder by its id from list_reminders.", "input_schema": _schema({"id": {"type": "integer"}})},
+    {"name": "add_note", "description": "Save a note for the user (facts to remember, like a device model or a password hint location).",
+     "input_schema": _schema({"text": {"type": "string"}})},
+    {"name": "search_notes", "description": "Search the user's notes. Use it when they ask about something they may have noted before.",
+     "input_schema": _schema({"query": {"type": "string"}})},
+    {"name": "add_calendar_item", "description": "Add an event or a bill to the calendar. Bills get reminders remind_days_before days before "
+     "(default 3) and on the day. time is null for all-day items. amount is the bill amount (null if unknown).",
+     "input_schema": _schema({"title": {"type": "string"}, "kind": {"type": "string", "enum": ["event", "bill"]},
+                              "date": {"type": "string", "description": "YYYY-MM-DD (the first/next due date for repeating bills)"},
+                              "time": {"type": ["string", "null"], "description": "HH:MM, or null"},
+                              "amount": {"type": ["number", "null"]},
+                              "repeat": {"type": "string", "enum": ["", "daily", "weekdays", "weekly", "monthly", "yearly"]},
+                              "remind_days_before": {"type": ["integer", "null"]}})},
+    {"name": "agenda", "description": "Events, bills (including overdue ones) and reminders in the next N days.",
+     "input_schema": _schema({"days": {"type": "integer", "description": "1 to 365"}})},
+    {"name": "mark_bill_paid", "description": "Mark a bill paid by name or id. A repeating bill moves to its next due date.",
+     "input_schema": _schema({"bill": {"type": "string"}})},
+    {"name": "daily_report", "description": "The daily briefing: lab health, recent alerts, today's calendar and bills due this week.",
+     "input_schema": _schema({})},
     {"name": "discover_media", "description": "Find media apps (Plex, Sonarr, Radarr, Lidarr, Prowlarr, Overseerr, qBittorrent, Deluge, "
      "SABnzbd) running in Docker on Unraid and VMs, or installed in Proxmox VMs/LXCs, and whether each is already in Jarvis. "
      "Changes nothing; the user adds them in Setup.", "input_schema": _schema({})},
@@ -158,7 +187,10 @@ PROGRESS = {
     "search_media": "Searching", "add_media": "Adding it", "search_missing": "Starting the search", "list_requests": "Checking requests",
     "decide_requests": "Updating requests", "indexer_status": "Checking indexers", "test_indexers": "Testing indexers",
     "list_hosts": "Listing hosts", "run_command": "Running the command", "list_devices": "Asking pfSense", "create_vm": "Creating the VM",
-    "check_vm_setup": "Checking the VM setup", "discover_media": "Looking for media apps", "check_updates": "Checking for updates", "install_updates": "Preparing updates",
+    "check_vm_setup": "Checking the VM setup", "discover_media": "Looking for media apps",
+    "add_reminder": "Setting a reminder", "list_reminders": "Checking your reminders", "cancel_reminder": "Cancelling the reminder",
+    "add_note": "Saving the note", "search_notes": "Searching your notes", "add_calendar_item": "Adding it to the calendar",
+    "agenda": "Checking your calendar", "mark_bill_paid": "Marking it paid", "daily_report": "Putting your report together", "check_updates": "Checking for updates", "install_updates": "Preparing updates",
     "update_containers": "Checking those containers", "restart_container": "Restarting the container",
     "docker_cleanup": "Cleaning up Docker", "reboot_host": "Rebooting",
 }
@@ -199,6 +231,20 @@ def outcome(name: str, content: str, is_error: bool) -> str | None:
         rest = [l.strip() for l in content.strip().splitlines()[1:] if l.strip()]
         return f"  {first}" + (f": {rest[-1][:160]}" if rest else "")
     return None
+
+
+class _Match:
+    """For handlers that read the original-case text through m.m[...]."""
+
+    def __init__(self, **groups):
+        self.m = groups
+
+    @classmethod
+    def raw(cls, **groups):
+        return cls(**groups)
+
+    def __getitem__(self, key):
+        return self.m.get(key)
 
 
 class _Groups:
@@ -311,6 +357,15 @@ class Brain:
             "run_command": lambda: j.run(g(host=a["host"], cmd=a["command"])),
             "check_vm_setup": lambda: j.check_vm_setup(g()),
             "discover_media": lambda: j.discover_media(g()),
+            "add_reminder": lambda: self._add_reminder(a),
+            "list_reminders": lambda: j.list_reminders(g()),
+            "cancel_reminder": lambda: j.cancel_reminder(g(n=a["id"])),
+            "add_note": lambda: j.add_note(_Match.raw(text=a["text"])),
+            "search_notes": lambda: self._search_notes(a["query"]),
+            "add_calendar_item": lambda: self._add_calendar_item(a),
+            "agenda": lambda: j.agenda(g(days=max(1, min(int(a["days"]), 365)))),
+            "mark_bill_paid": lambda: j.mark_paid(_Match.raw(name=a["bill"])),
+            "daily_report": lambda: j.daily_report(g()),
             "check_updates": lambda: j.host_updates_check(g(host=a["host"])),
             "install_updates": lambda: j.update_selected(a["host"], a["packages"], a["containers"]),
             "update_containers": lambda: j.update_selected(a["host"], False, True, a["containers"]),
@@ -321,6 +376,29 @@ class Brain:
         if name not in handlers:
             raise ValueError(f"Unknown tool {name}")
         return handlers[name]()
+
+    # planner tools that need a little more than a text command
+    def _add_reminder(self, a: dict) -> str:
+        from datetime import datetime
+        from . import organizer as O
+        when = datetime.fromisoformat(a["when"])
+        if when < O.now() and not a.get("repeat"):
+            raise ValueError(f"{a['when']} is in the past. Use a future time.")
+        rid = O.add_reminder(a["text"], when, a.get("repeat") or "")
+        return f"Reminder {rid} set: {a['text']} at {when:%a %d %b %H:%M}" + (f", repeating {a['repeat']}" if a.get("repeat") else "")
+
+    def _search_notes(self, q: str) -> str:
+        from . import organizer as O
+        ns = O.notes(q, limit=8)
+        return "\n".join(f"{n['id']}. {n['text']} ({n['created'][:10]})" for n in ns) or "No matching notes."
+
+    def _add_calendar_item(self, a: dict) -> str:
+        from datetime import date
+        from . import organizer as O
+        eid = O.add_event(a["title"], date.fromisoformat(a["date"]), a["kind"], a.get("time") or "", a.get("amount"),
+                          a.get("repeat") or "", a.get("remind_days_before"))
+        return f"Added {a['kind']} {eid}: {a['title']} on {a['date']}" + (f" at {a['time']}" if a.get("time") else "") + \
+            (f", {O.money(a['amount'])}" if a.get("amount") else "") + (f", repeating {a['repeat']}" if a.get("repeat") else "")
 
     def execute(self, name: str, args: dict) -> tuple[str, bool]:
         """Run one tool. Returns (text for the model, is_error)."""

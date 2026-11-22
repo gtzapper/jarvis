@@ -53,6 +53,8 @@ def check_args(name: str, raw) -> tuple[dict | None, str | None]:
         try:
             if "integer" in types and not isinstance(v, bool):
                 v = int(float(v))
+            elif "number" in types and not isinstance(v, bool):
+                v = float(str(v).replace(",", "").lstrip("$£€₹"))
             elif "boolean" in types and not isinstance(v, bool):
                 v = str(v).strip().lower() in ("true", "yes", "on", "1")
             elif "string" in types:

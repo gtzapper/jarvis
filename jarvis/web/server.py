@@ -6,6 +6,7 @@ Security: listens on this PC only unless a password is set. All changes need the
 import hmac
 import ipaddress
 import os
+import re
 import secrets as pysecrets
 import threading
 import time
@@ -64,6 +65,7 @@ class State:
             self.stack = MediaStack(self.cfg)
             self.monitor = Monitor(self.cfg, build_collectors(self.cfg, self.stack))
             self.assistant = Assistant(self.cfg, self.stack)
+            self.assistant.report_source = self.build_report
         self.wake.set()
 
     def monitor_loop(self):
@@ -77,6 +79,45 @@ class State:
                     print(f"monitor error: {e}")
             self.wake.wait(interval)
             self.wake.clear()
+
+    # ------------------------------------------------------------ reminders, bills and the daily report
+
+    def planner_cfg(self) -> dict:
+        with self.lock:
+            p = dict(self.cfg.get("planner") or {})
+        return {"ntfy": p.get("ntfy", True), "app": p.get("app", True), "spoken": p.get("spoken", True),
+                "report_time": p.get("report_time", "08:00") if "report_time" in p else "08:00",
+                "quiet_hours": p.get("quiet_hours", "22:00-07:00") if "quiet_hours" in p else "22:00-07:00"}
+
+    def build_report(self) -> str:
+        from .. import organizer
+        with self.lock:
+            mon = self.monitor
+        reports = mon.reports
+        summary = spoken_summary(reports) if reports else None
+        alerts = [m for _, m in (mon.events or [])[:10]]
+        return organizer.daily_report(summary, alerts)
+
+    def scheduler_loop(self):
+        """Every 30 seconds: due reminders, bill notices, events starting soon, and the daily report."""
+        from .. import organizer
+        from ..monitor import Notifier
+        while True:
+            try:
+                p = self.planner_cfg()
+                with self.lock:
+                    notifier = Notifier(self.cfg)
+                for kind, title, text in organizer.due_now():
+                    if p["ntfy"]:
+                        notifier.send(title, text)
+                if organizer.report_due(p["report_time"]):
+                    text = self.build_report()
+                    organizer.record("report", "Daily report", text)
+                    if p["ntfy"]:
+                        notifier.send("Daily report", text)
+            except Exception as e:  # keep reminders alive whatever happens
+                print(f"scheduler error: {e}")
+            time.sleep(30)
 
     # ------------------------------------------------------------ chat jobs
 
@@ -132,6 +173,8 @@ def create_app(state: State, password: str | None) -> Flask:
     def guard():
         if request.path in ("/login", "/favicon.ico") or request.path in APP_FILES:  # the app icon and manifest hold no data
             return None
+        if request.path.startswith("/calendar/"):
+            return None  # the private calendar feed checks its own secret link
         if request.path.startswith("/api/voice/device/"):
             # listening devices sign in with their own access code (Setup > Listening devices), never the dashboard password
             from ..voice import device_for
@@ -401,7 +444,7 @@ def create_app(state: State, password: str | None) -> Flask:
         job = state.jobs.get(job_id)
         if not job or getattr(job, "device_id", None) != g.device["id"]:
             abort(404)
-        return voice_view(job, voice_client(), job.text, with_audio=job.status == "done" and request.args.get("speak") == "1")
+        return voice_view(job, voice_client(), job.text, with_audio=job.status in ("done", "input") and request.args.get("speak") == "1")
 
     @app.get("/api/voice/devices")
     def voice_devices():
@@ -426,6 +469,143 @@ def create_app(state: State, password: str | None) -> Flask:
         remove_device(device_id)
         audit(f"voice: removed listening device {device_id}")
         return jsonify(ok=True)
+
+    # ------------------------------------------------------------ planner: reminders, notes, events and bills
+
+    def _quiet(window: str) -> bool:
+        m = re.fullmatch(r"\s*(\d{1,2}):(\d{2})\s*-\s*(\d{1,2}):(\d{2})\s*", window or "")
+        if not m:
+            return False
+        a, b = int(m[1]) * 60 + int(m[2]), int(m[3]) * 60 + int(m[4])
+        lt = time.localtime()
+        t = lt.tm_hour * 60 + lt.tm_min
+        return (a <= t < b) if a <= b else (t >= a or t < b)
+
+    @app.get("/calendar/<token>.ics")
+    def calendar_feed(token):
+        from .. import organizer
+        if not organizer.feed_enabled() or not hmac.compare_digest(token, organizer.feed_token()):
+            abort(404)
+        return app.response_class(organizer.ics(), mimetype="text/calendar", headers={"Cache-Control": "no-cache"})
+
+    @app.get("/api/planner")
+    def planner():
+        from .. import organizer as O
+        days = max(1, min(int(request.args.get("days", 31)), 400))
+        return jsonify(upcoming=[{**i, "text": O.describe(i)} for i in O.upcoming(days)], reminders=O.reminders(),
+                       events=O.events(), notes=O.notes(limit=200), feed=f"/calendar/{O.feed_token()}.ics",
+                       feed_enabled=O.feed_enabled(), repeats=O.REPEATS)
+
+    @app.post("/api/planner/feed")
+    def planner_feed_toggle():
+        from .. import organizer as O
+        on = bool((request.json or {}).get("enabled"))
+        return _planner_change(lambda: O.set_feed_enabled(on) or on, "calendar link " + ("published" if on else "unpublished"))
+
+    @app.get("/api/planner/feed/qr.svg")
+    def planner_feed_qr():
+        """A QR code of the subscription link, to scan with the phone's camera (webcal:// opens the calendar app)."""
+        import io
+        import segno
+        from .. import organizer as O
+        if not O.feed_enabled():
+            abort(404)
+        url = request.host_url.rstrip("/") + f"/calendar/{O.feed_token()}.ics"
+        url = "webcal://" + url.split("://", 1)[1] if request.args.get("webcal") == "1" else url
+        buf = io.BytesIO()
+        segno.make(url, error="m").save(buf, kind="svg", scale=5, border=2, dark="#000000", light="#ffffff")
+        return app.response_class(buf.getvalue(), mimetype="image/svg+xml", headers={"Cache-Control": "no-store"})
+
+    def _planner_change(fn, what: str):
+        from ..audit import audit
+        try:
+            result = fn()
+        except (ValueError, KeyError, TypeError) as e:
+            return jsonify(ok=False, error=str(e))
+        audit(f"planner: {what}")
+        return jsonify(ok=True, result=result)
+
+    @app.post("/api/planner/note")
+    def planner_note():
+        from .. import organizer as O
+        text = (request.json or {}).get("text", "")
+        return _planner_change(lambda: O.add_note(text), f"note added: {text[:60]}")
+
+    @app.post("/api/planner/reminder")
+    def planner_reminder():
+        from datetime import datetime as dt
+        from .. import organizer as O
+        b = request.json or {}
+        return _planner_change(lambda: O.add_reminder(b.get("text", ""), dt.fromisoformat(b["due"]), b.get("repeat", "")),
+                               f"reminder added: {b.get('text', '')[:60]} at {b.get('due')}")
+
+    @app.post("/api/planner/event")
+    def planner_event():
+        from datetime import date as d_
+        from .. import organizer as O
+        b = request.json or {}
+        amount = float(b["amount"]) if str(b.get("amount") or "").strip() else None
+        rd = int(b["remind_days"]) if str(b.get("remind_days") or "").strip() else None
+        return _planner_change(lambda: O.add_event(b.get("title", ""), d_.fromisoformat(b["day"]), b.get("kind", "event"),
+                                                   b.get("time") or "", amount, b.get("repeat", ""), rd, b.get("notes", "")),
+                               f"{b.get('kind', 'event')} added: {b.get('title', '')[:60]} on {b.get('day')}")
+
+    @app.post("/api/planner/<kind>/<int:item_id>/delete")
+    def planner_delete(kind, item_id):
+        from .. import organizer as O
+        fn = {"note": O.delete_note, "reminder": O.cancel_reminder, "event": O.delete_event}.get(kind) or abort(404)
+        return _planner_change(lambda: fn(item_id), f"{kind} {item_id} deleted")
+
+    @app.post("/api/planner/event/<int:item_id>/paid")
+    def planner_paid(item_id):
+        from .. import organizer as O
+        return _planner_change(lambda: O.mark_paid(item_id), f"bill {item_id} marked paid")
+
+    @app.post("/api/planner/feed/reset")
+    def planner_feed_reset():
+        from .. import organizer as O
+        return _planner_change(lambda: f"/calendar/{O.reset_feed_token()}.ics", "calendar link replaced")
+
+    @app.get("/api/report")
+    def report():
+        return jsonify(text=state.build_report())
+
+    @app.get("/api/outbox")
+    def app_outbox():
+        """Reminders, bill notices and reports for the Jarvis app to show as notifications."""
+        from .. import organizer as O
+        after = request.args.get("after", type=int)
+        p = state.planner_cfg()
+        if after is None:  # first contact: start from now, no backlog
+            return jsonify(items=[], last=O.last_outbox_id(), enabled=p["app"])
+        return jsonify(items=O.outbox(after) if p["app"] else [], last=O.last_outbox_id(), enabled=p["app"])
+
+    @app.get("/api/voice/device/announcements")
+    def device_announcements():
+        """Reminders and the daily report, spoken by listening devices (outside quiet hours)."""
+        import base64
+        from .. import organizer as O
+        after = request.args.get("after", type=int)
+        p = state.planner_cfg()
+        last = O.last_outbox_id()
+        if after is None or not p["spoken"] or _quiet(p["quiet_hours"]):
+            return jsonify(items=[], last=last)
+        from datetime import datetime as dt, timedelta
+        fresh = dt.now() - timedelta(minutes=15)  # a device that was off doesn't read out hours-old reminders
+        items = [i for i in O.outbox(after, limit=20) if dt.fromisoformat(i["at"]) >= fresh][:5]
+        client = voice_client()
+        out = []
+        for it in items:
+            text = it["text"] if it["kind"] in ("report", "reminder") else f"{it['title']}. {it['text']}"
+            if it["kind"] == "reminder":
+                text = f"Reminder: {it['text']}"
+            entry = {"id": it["id"], "kind": it["kind"], "text": text}
+            try:
+                entry["audio"] = base64.b64encode(client.speak(text)).decode()
+            except Exception as e:
+                entry["audio_error"] = str(e)
+            out.append(entry)
+        return jsonify(items=out, last=last)
 
     @app.get("/api/pending")
     def pending():
@@ -565,6 +745,7 @@ def serve(host: str | None = None, port: int | None = None, monitor: bool = True
                          "Set JARVIS_WEB_PASSWORD in .env (or in Setup > Web dashboard), or use --host 127.0.0.1.")
     if monitor:
         threading.Thread(target=state.monitor_loop, daemon=True).start()
+    threading.Thread(target=state.scheduler_loop, daemon=True).start()
     from waitress import serve as waitress_serve
     shown = "localhost" if _is_local(host) or host == "0.0.0.0" else host
     print(f"Jarvis dashboard: http://{shown}:{port}" + ("  (also reachable from your network)" if host == "0.0.0.0" else ""))

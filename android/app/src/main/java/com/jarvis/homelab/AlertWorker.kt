@@ -29,6 +29,7 @@ class AlertWorker(context: Context, params: WorkerParameters) : CoroutineWorker(
     override suspend fun doWork(): Result {
         val prefs = Prefs(applicationContext)
         if (!prefs.alerts || prefs.server.isEmpty()) return Result.success()
+        syncPlanner(applicationContext)
         val status = try {
             Api(prefs).get("/api/status")
         } catch (e: AuthNeeded) {
@@ -68,6 +69,31 @@ class AlertWorker(context: Context, params: WorkerParameters) : CoroutineWorker(
     companion object {
         private const val CHANNEL = "alerts"
 
+        /** Reminders, bill notices and the daily report from Jarvis's notification feed, and exact alarms for upcoming reminders. */
+        fun syncPlanner(context: Context) {
+            val prefs = Prefs(context)
+            val api = Api(prefs)
+            try {
+                val box = api.get("/api/outbox" + if (prefs.outboxLast >= 0) "?after=${prefs.outboxLast}" else "")
+                val items = box.optJSONArray("items")
+                val fired = prefs.recentReminders.mapNotNull { e -> e.substringBeforeLast("|").takeIf {
+                    System.currentTimeMillis() - (e.substringAfterLast("|").toLongOrNull() ?: 0) < 3600_000 } }.toSet()
+                for (i in 0 until (items?.length() ?: 0)) {
+                    val it = items!!.getJSONObject(i)
+                    val kind = it.optString("kind")
+                    if (kind == "reminder" && it.optString("text") in fired) continue  // the phone's own alarm already showed it
+                    notify(context, 3000 + it.optInt("id") % 1000, it.optString("title"), it.optString("text"), openStatus = false,
+                        channel = if (kind == "report") "reports" else "reminders")
+                }
+                prefs.outboxLast = box.optInt("last", prefs.outboxLast)
+                val planner = api.get("/api/planner?days=${PhoneCalendar.WINDOW_DAYS}")
+                planner.optJSONArray("reminders")?.let { ReminderAlarms.schedule(context, it) }
+                if (prefs.phoneCalendar) planner.optJSONArray("upcoming")?.let { PhoneCalendar.sync(context, it) }
+            } catch (_: Exception) {
+                // away from home or Jarvis is down: try again next time
+            }
+        }
+
         fun schedule(context: Context) {
             val req = PeriodicWorkRequestBuilder<AlertWorker>(15, TimeUnit.MINUTES)
                 .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
@@ -77,19 +103,23 @@ class AlertWorker(context: Context, params: WorkerParameters) : CoroutineWorker(
 
         fun cancel(context: Context) = WorkManager.getInstance(context).cancelUniqueWork("jarvis-alerts")
 
-        fun notify(context: Context, id: Int, title: String, text: String, openStatus: Boolean) {
+        fun notify(context: Context, id: Int, title: String, text: String, openStatus: Boolean, channel: String = CHANNEL) {
             if (Build.VERSION.SDK_INT >= 33 &&
                 ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) return
             val nm = context.getSystemService(NotificationManager::class.java)
-            if (nm.getNotificationChannel(CHANNEL) == null) {
-                nm.createNotificationChannel(NotificationChannel(CHANNEL, "Lab alerts", NotificationManager.IMPORTANCE_DEFAULT)
-                    .apply { description = "New problems Jarvis finds in your homelab" })
+            if (nm.getNotificationChannel(channel) == null) {
+                val (name, desc, importance) = when (channel) {
+                    "reminders" -> Triple("Reminders and bills", "Your reminders, bill notices and events", NotificationManager.IMPORTANCE_HIGH)
+                    "reports" -> Triple("Daily report", "Jarvis's morning briefing", NotificationManager.IMPORTANCE_DEFAULT)
+                    else -> Triple("Lab alerts", "New problems Jarvis finds in your homelab", NotificationManager.IMPORTANCE_DEFAULT)
+                }
+                nm.createNotificationChannel(NotificationChannel(channel, name, importance).apply { description = desc })
             }
             val open = Intent(context, MainActivity::class.java)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
-                .putExtra("tab", if (openStatus) "status" else "chat")
+                .putExtra("tab", if (openStatus) "status" else if (channel == CHANNEL) "chat" else "planner")
             val pi = PendingIntent.getActivity(context, id, open, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
-            val n = NotificationCompat.Builder(context, CHANNEL)
+            val n = NotificationCompat.Builder(context, channel)
                 .setSmallIcon(R.drawable.ic_stat_jarvis)
                 .setContentTitle(title)
                 .setContentText(text)
