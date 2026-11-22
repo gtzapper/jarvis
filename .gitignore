@@ -5,3 +5,6 @@ data/
 __pycache__/
 config.yaml.bak
 config/
+
+# built Android app
+Jarvis.apk

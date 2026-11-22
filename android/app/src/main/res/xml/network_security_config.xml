@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Jarvis runs on your home network at an address you choose, usually plain http://.
+     Cleartext is allowed so the app can reach it; use a VPN (or HTTPS via Tailscale) away from home. -->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

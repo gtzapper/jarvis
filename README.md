@@ -397,7 +397,16 @@ The dashboard has to listen on your network for this, so set a dashboard passwor
 
 **HTTP vs HTTPS:** Chrome only fully installs a web app from a secure address. Over plain `http://` on your Wi-Fi you still get a home-screen icon, but it may open as a normal Chrome tab with the address bar. To get the full app, reach Jarvis over HTTPS. The easiest way is Tailscale: install it on the Jarvis host and your phone, turn on MagicDNS and HTTPS certificates in the Tailscale admin console (DNS page), then run `tailscale serve --bg 8080` on the host. That gives a private `https://<name>.<tailnet>.ts.net` address that only your devices can reach. Don't open Jarvis to the internet directly.
 
-A native Android app is planned next; it doesn't need HTTPS on your home network.
+There's also a native Android app (below), which doesn't need HTTPS on your home network.
+
+## Android app
+A native app in `android/`: chat with live steps, approve or decline actions (destructive ones in red), the Ask / Auto / Read-only switch, voice input with spoken replies, lab status, the activity log, and lab alerts as phone notifications. Alerts work by the phone checking your Jarvis every 15 minutes; no Google push service or outside server is involved.
+
+**Install:** copy `Jarvis.apk` to your phone and open it. Android asks you to allow installs from that app (Files, Chrome...) the first time. Then enter your Jarvis address (the one you open the dashboard with) and the dashboard password. The password isn't stored on the phone; the app keeps the login session, like a browser.
+
+**Build it yourself:** open `android/` in Android Studio, or run `gradlew assembleDebug` inside `android/` (needs the Android SDK, and Java 17 or newer). The APK appears at `android/app/build/outputs/apk/debug/app-debug.apk`.
+
+The app allows plain `http://` because Jarvis normally runs at a local address. Away from home, connect through a VPN (WireGuard on pfSense, or Tailscale) rather than opening Jarvis to the internet.
 
 ## Phone alerts (optional)
 Install the **ntfy** app, subscribe to a long random topic name, and set `NTFY_URL=https://ntfy.sh/<that-topic>` in `.env`. Anyone who knows the topic name can read it, so make it unguessable, or self-host ntfy.
