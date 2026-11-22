@@ -399,10 +399,20 @@ class Brain:
         return bool(getattr(self.assistant, "family", False))
 
     def tools(self) -> list:
-        return [t for t in TOOLS if t["name"] in FAMILY_TOOLS] if self.family else TOOLS
+        if self.family:
+            return [t for t in TOOLS if t["name"] in FAMILY_TOOLS]
+        if getattr(self.assistant, "remote", False):
+            from .webguard import REMOTE_BLOCKED_TOOLS
+            return [t for t in TOOLS if t["name"] not in REMOTE_BLOCKED_TOOLS]
+        return TOOLS
 
     def system(self, local: bool = False) -> str:
-        return system_prompt(self.cfg, local, getattr(self.assistant, "user", None))
+        text = system_prompt(self.cfg, local, getattr(self.assistant, "user", None))
+        if getattr(self.assistant, "remote", False) and not self.family:
+            text += ("\n\nThe owner is signed in from OUTSIDE the home network right now, so shell commands, reboots, updates, "
+                     "restarts, creating VMs and deleting things aren't available. If they ask for one, say it works from home or over "
+                     "their VPN. Everything else (status, downloads, planner, email summaries, media) works as usual.")
+        return text
 
     # ------------------------------------------------------------ tools
 
@@ -580,6 +590,10 @@ class Brain:
         self.assistant.declined = False
         if self.family and name not in FAMILY_TOOLS:
             return "That tool isn't available in a family member's chat. Tell them it's something the owner handles.", True
+        if getattr(self.assistant, "remote", False):
+            from .webguard import REMOTE_BLOCKED_TOOLS
+            if name in REMOTE_BLOCKED_TOOLS:
+                return "Not available away from home: tell the user it works from home or over their VPN.", True
         try:
             content = self.run_tool(name, args) or "(done, no output)"
             if getattr(self.assistant, "declined", False):

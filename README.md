@@ -470,6 +470,49 @@ How it's checked:
 
 The **Android app** (2.3) signs in the same way: **Sign in** opens your Jarvis sign-in page (every provider's button) inside the app, and the app keeps only Jarvis's session. A username and password field is there too. Family accounts get a smaller app: Chat, Planner (Soon, Lists, Media and Notes) and Settings.
 
+## Reaching Jarvis from outside home
+Jarvis can run commands on your servers, reboot them and read your email summaries. **Don't port-forward it.** In order of preference:
+
+1. **A VPN (recommended).** WireGuard on pfSense (VPN → WireGuard) or Tailscale. Phones connect and Jarvis works exactly as at home. Nothing is exposed, and the app and listening devices need no changes.
+2. **Cloudflare Tunnel with Cloudflare Access.** Nothing is opened on your router, and Cloudflare checks who you are before anything reaches Jarvis.
+   - `docker-compose.yml` has a ready `tunnel` service; the steps are in its comments (`docker compose --profile tunnel up -d`).
+   - Trade-off: Cloudflare decrypts the traffic, so it can see your pages.
+3. **Your own reverse proxy** (Traefik, Nginx Proxy Manager, Caddy, SWAG) on 443, ideally with Authentik forward-auth or CrowdSec in front.
+
+Then, in Setup → **Internet access & security**:
+- **Reverse proxy / tunnel addresses:** your proxy's IP, or `172.31.250.3` for the bundled tunnel.
+  - Only these may tell Jarvis who the real visitor is (`X-Forwarded-For`, `X-Forwarded-Proto`).
+  - Forwarded requests from anything else count as outside, never home. So does a listed proxy that doesn't say who it's forwarding.
+  - A faked `X-Forwarded-For: 192.168.1.5` gets an outsider nothing.
+- **Home and VPN networks:** blank means all private ranges plus Tailscale.
+
+What changes for visitors from outside:
+
+| | At home / on VPN | From outside |
+|---|---|---|
+| Password sign-in | password | password **+ authenticator code** (setting: outside / always / off) |
+| Single sign-on | yes | yes (counts as two-factor, since your provider does MFA) |
+| Admins | everything | chat, status, downloads, planner, email, media. **No** Setup, users, shell commands, reboots, updates, restarts, new VMs or deleting (the AI loses those tools too). Set *Admins away from home* to *full* to allow them. |
+| Sessions | 30 days | 72 hours (setting) |
+
+For everyone:
+- **Authenticator codes:** each person turns them on under their account (bottom of the menu) by scanning a QR code with Google Authenticator, Aegis, 1Password or similar.
+  - Someone accepting an invitation from outside sets up their code while creating the account.
+  - Codes work once, so a code someone saw can't be reused.
+- **Lockout:**
+  - 5 failed attempts from one address in 15 minutes blocks that address for 15 minutes.
+  - 10 failures on one account lock that account for 15 minutes.
+  - Wrong passwords, wrong codes and guessed invitation links all count. Setup → Security has **Clear lockouts**.
+- **Sessions:** changing your password signs out your other devices. **Sign out everywhere else** is under your account.
+- **Alerts** (outbox and ntfy): a sign-in from a new address outside home, and every lockout. All of it is also in the audit log.
+- **Browser protection:**
+  - Cookies are HTTPS-only when you came in over HTTPS.
+  - HSTS, a Content-Security-Policy, no framing, no referrer.
+- **Setup → Security card:**
+  - your address, and whether Jarvis sees you as home;
+  - a warning if a proxy is forwarding without being listed;
+  - who hasn't set up codes yet, and the recent failed sign-ins.
+
 ## Permission modes (Ask, Auto, Read-only)
 Like Claude Code, Jarvis has modes for how much it may do without asking. Switch them with the pill above the chat box, or type `ask mode`, `auto mode` or `read-only mode` (`mode` shows the current one).
 

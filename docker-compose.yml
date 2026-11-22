@@ -16,6 +16,10 @@ services:
       - .:/app
       # Jarvis's config.yaml, .env (keys and passwords), data/ and .ssh/ key.
       - ./config:/config
+    networks:
+      default:
+      edge:
+        ipv4_address: 172.31.250.2
 
   # Optional: speech for "Hey Jarvis" (Whisper speech-to-text + Kokoro voice), on the CPU.
   # Start it with:  docker compose --profile voice up -d
@@ -46,6 +50,32 @@ services:
       SEARXNG_SECRET: "${SEARXNG_SECRET:-set-a-long-random-value-in-.env}"
     volumes:
       - ./docker/searxng:/etc/searxng
+
+  # Optional: reach Jarvis from the internet through a Cloudflare Tunnel (no ports opened on your router).
+  # Better first: a VPN (WireGuard on pfSense, or Tailscale). If you do use this:
+  #   1. Cloudflare Zero Trust > Networks > Tunnels > Create, pick Docker, copy the token into .env as CLOUDFLARE_TUNNEL_TOKEN.
+  #      Public hostname: jarvis.example.com -> http://jarvis:8765
+  #   2. Strongly recommended: Zero Trust > Access > Applications: put a login (email code, Google or your Authentik) in front.
+  #   3. Jarvis Setup > Internet access & security > Reverse proxy addresses: 172.31.250.3
+  #   4. docker compose --profile tunnel up -d
+  tunnel:
+    image: cloudflare/cloudflared:latest
+    container_name: jarvis-tunnel
+    profiles: ["tunnel"]
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run
+    environment:
+      TUNNEL_TOKEN: "${CLOUDFLARE_TUNNEL_TOKEN:-}"
+    networks:
+      edge:
+        ipv4_address: 172.31.250.3
+
+networks:
+  # a tiny private network so a tunnel or proxy has one known address Jarvis can trust
+  edge:
+    ipam:
+      config:
+        - subnet: 172.31.250.0/29
 
 volumes:
   voice-models:

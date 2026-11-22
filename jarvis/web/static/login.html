@@ -37,16 +37,29 @@ button { width: 100%; padding: 10px; border: 0; border-radius: 8px; background: 
     <input type="password" name="password" placeholder="Password" autocomplete="current-password" required>
     <button>Sign in</button>
   </form>
+  <form method="post" action="/login/code" id="codeform" hidden>
+    <input name="code" placeholder="6-digit code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9 ]{6,7}" required>
+    <button>Verify</button>
+  </form>
   <button type="button" class="toggle" id="toggle" hidden></button>
   <div class="foot" id="foot">Got an invitation? Open the link in the email to create your account.</div>
 </div>
 <script>
 const $ = s => document.querySelector(s);
 const q = new URLSearchParams(location.search);
-if (q.get("error")) { $("#err").hidden = false;
-  $("#err").textContent = q.get("error") === "sso" ? "Please sign in with single sign-on." : "Wrong username or password."; }
+const errors = { sso: "Please sign in with single sign-on.", "1": "Wrong username or password.",
+  locked: "Too many failed attempts. Wait 15 minutes and try again.",
+  "2fa_setup": "From outside your home network this account needs an authenticator code, and it doesn't have one yet. Sign in at home (or over your VPN) and turn it on under your account, or use single sign-on.",
+  expired: "That took too long. Sign in again.", code: "That code didn't work. Use the current one from your authenticator app." };
+if (q.get("error")) { $("#err").hidden = false; $("#err").textContent = errors[q.get("error")] || errors["1"]; }
+if (q.get("step") === "code") {  // password was right; now the authenticator code
+  $("#lead").textContent = "Enter the 6-digit code from your authenticator app.";
+  $("#pw").hidden = true; $("#codeform").hidden = false; $("#foot").hidden = true;
+  $("#codeform input").focus();
+}
 const key = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="15" r="4"/><path d="M10.8 12.2 20 3M17 6l3 3M15 8l2 2"/></svg>';
 fetch("/auth/info").then(r => r.json()).then(d => {
+  if (q.get("step") === "code") return;
   const ps = d.providers || [];
   if (!ps.length) return;  // passwords only
   const box = $("#ssobox");

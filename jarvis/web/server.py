@@ -252,6 +252,7 @@ class State:
 
         with self.job_lock:
             a = self.assistant_for(job.user)
+            a.remote = bool(getattr(job, "remote", False))
             a.confirm = lambda q: bool(ask({"type": "confirm", "question": q}))
 
             def confirm_code(q):
@@ -287,7 +288,17 @@ def create_app(state: State, password: str | None) -> Flask:
         SECRET_FILE.write_text(pysecrets.token_hex(32))
     app.secret_key = SECRET_FILE.read_text().strip()
     app.config.update(SESSION_COOKIE_SAMESITE="Strict", SESSION_COOKIE_HTTPONLY=True)
-    from .. import invites, oidc, users
+    from datetime import timedelta as _td
+    from flask.sessions import SecureCookieSessionInterface
+    from .. import invites, oidc, users, webguard
+    app.permanent_session_lifetime = _td(days=30)
+
+    class _Sessions(SecureCookieSessionInterface):
+        def get_cookie_secure(self, app_):  # HTTPS-only cookie whenever the visitor reached us over HTTPS
+            return bool(getattr(g, "client", {}).get("https"))
+    app.session_interface = _Sessions()
+    lockout = webguard.Lockout()
+    totp_drafts: dict[str, tuple[str, float]] = {}  # invitation hash -> (new secret, created): 2FA set up while accepting
     users.ensure_owner(password)  # first start with accounts: the dashboard password becomes the 'admin' account
 
     def auth_required() -> bool:
@@ -299,14 +310,25 @@ def create_app(state: State, password: str | None) -> Flask:
         uid = session.get("uid")
         if uid:
             u = users.get(uid)
-            return u if u and not u.get("disabled") else None
+            if not u or u.get("disabled"):
+                return None
+            if int(session.get("sv", 0)) != int(u.get("sv") or 0):
+                return None  # password changed or "sign out everywhere"
+            home = g.home
+            if not home:
+                hours = float(webguard.settings(state.cfg)["outside_session_hours"] or 72)
+                if time.time() - float(session.get("iat", 0)) > hours * 3600:
+                    return None  # outside sessions don't last as long
+                if not session.get("mfa") and webguard.needs_2fa(state.cfg, u, False, session.get("via") == "sso"):
+                    return None  # signed in at home without a code; from outside that isn't enough
+            return u
         if session.get("ok"):  # signed in before accounts existed: that was the owner
             return next((u for u in users.all_users() if u["role"] == "admin" and not u.get("disabled")), OWNER)
         return None if auth_required() else OWNER
 
     # What a family member may use. Everything else (Setup, the lab, email, approvals...) is admin only.
     FAMILY = [("GET", r"/api/(me|mode|ai|weather|outbox|pending|life|planner|media/watch|media/requests)"),
-              ("POST", r"/api/me/password|/logout|/api/chat(/reset)?|/api/chat/[\w-]+/answer|/api/media/request"),
+              ("POST", r"/api/me/(password|2fa/\w+|signout-all)|/logout|/api/chat(/reset)?|/api/chat/[\w-]+/answer|/api/media/request"),
               ("GET", r"/api/chat/[\w-]+"),
               ("POST", r"/api/life/item(/\d+/(check|uncheck|delete))?|/api/life/clear|/api/planner/(note|reminder)(/\d+/delete)?")]
 
@@ -322,7 +344,9 @@ def create_app(state: State, password: str | None) -> Flask:
 
     @app.before_request
     def guard():
-        if request.path in ("/login", "/favicon.ico", "/auth/info", "/auth/sso", "/auth/sso/callback") or request.path in APP_FILES:
+        g.client = webguard.client(request.environ, state.cfg)
+        g.home = webguard.is_home(g.client, state.cfg)
+        if request.path in ("/login", "/login/code", "/favicon.ico", "/auth/info", "/auth/sso", "/auth/sso/callback") or request.path in APP_FILES:
             return None  # the app icon and manifest hold no data
         if request.path.startswith(("/invite/", "/api/invite/")):
             return None  # an invitation link is its own permission (checked in the handlers)
@@ -360,19 +384,65 @@ def create_app(state: State, password: str | None) -> Flask:
             abort(403)  # cross-site forms can't set this header
         if g.user["role"] != "admin" and not family_may(request.method, request.path):
             return jsonify(error="Your account can't use that. Ask the owner."), 403
+        if g.user["role"] == "admin" and remote_limited() and webguard.remote_blocked(request.method, request.path):
+            return jsonify(error="That only works from home or over your VPN (Setup > Internet access & security)."), 403
         return None
+
+    def remote_limited() -> bool:
+        return not g.home and webguard.settings(state.cfg)["remote_admin"] != "full"
+
+    def security_alert(title: str, text: str):
+        from .. import organizer
+        from ..monitor import Notifier
+        audit(f"SECURITY: {text}")
+        if not webguard.settings(state.cfg)["alerts"]:
+            return
+        organizer.record("security", title, text)
+        try:
+            Notifier(state.cfg).send(title, text)
+        except Exception:
+            pass
 
     @app.after_request
     def headers(resp):
         resp.headers["X-Frame-Options"] = "DENY"
         resp.headers["X-Content-Type-Options"] = "nosniff"
         resp.headers["Referrer-Policy"] = "no-referrer"
+        resp.headers["Permissions-Policy"] = "camera=(), geolocation=(), microphone=(self)"
+        resp.headers["Content-Security-Policy"] = (
+            "default-src 'self'; script-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com; "
+            "style-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com; img-src 'self' data: blob: https://tile.openstreetmap.org; "
+            "connect-src 'self'; media-src 'self' blob: data:; font-src 'self' data:; object-src 'none'; base-uri 'self'; "
+            "frame-ancestors 'none'; form-action 'self'")
+        if getattr(g, "client", {}).get("https"):
+            resp.headers["Strict-Transport-Security"] = "max-age=31536000"
+        if request.path.startswith(("/api/", "/login", "/invite/")):
+            resp.headers.setdefault("Cache-Control", "no-store")
         return resp
 
-    def _sign_in(u: dict):
+    def _sign_in(u: dict, mfa: bool = False, via: str = "password"):
         session.clear()
         session["uid"] = u["id"]
+        session["sv"] = int(u.get("sv") or 0)
+        session["iat"] = time.time()
+        session["mfa"] = mfa
+        session["via"] = via
         session.permanent = True
+        lockout.success(g.client["ip"], u["username"])
+        # a sign-in from an address we haven't seen for this person, outside home: tell the admins
+        ip = g.client["ip"]
+        seen = list(u.get("seen_ips") or [])
+        if not g.home and ip not in seen:
+            security_alert("New sign-in", f"{u.get('name') or u['username']} signed in from a new address outside home: {ip} "
+                                          f"({request.user_agent.string[:80] or 'unknown device'}).")
+        if ip not in seen:
+            users.update(u["id"], seen_ips=(seen + [ip])[-20:])
+
+    def _failed(username: str | None, what: str):
+        alert = lockout.fail(g.client["ip"], username, what)
+        if alert:
+            security_alert("Sign-in lockout", alert)
+        time.sleep(1)
 
     def password_login_allowed() -> bool:
         acc = state.cfg.get("accounts") or {}
@@ -384,21 +454,49 @@ def create_app(state: State, password: str | None) -> Flask:
         if not auth_required():
             return redirect("/")
         if request.method == "POST":
+            name = request.form.get("username", "").strip()
+            if lockout.blocked(g.client["ip"], name or None):
+                return redirect("/login?error=locked")
             if not password_login_allowed() and oidc.providers(state.cfg):
-                u0 = users.by_username(request.form.get("username", "")) if request.form.get("username") else None
+                u0 = users.by_username(name) if name else None
                 if u0 and u0["role"] != "admin":  # family must use single sign-on; admins keep a way in
                     time.sleep(1.5)
                     return redirect("/login?error=sso")
-            u = users.authenticate(request.form.get("username", "").strip(), request.form.get("password", ""))
+            u = users.authenticate(name, request.form.get("password", ""))
             if u and not password_login_allowed() and oidc.providers(state.cfg) and u["role"] != "admin":
                 u = None
-            if u:
-                _sign_in(u)
-                audit(f"login: {u['username']} (password)")
-                return redirect("/")
-            time.sleep(1.5)  # slow down guessing
-            return redirect("/login?error=1")
+            if not u:
+                _failed(name or "admin", "password")
+                return redirect("/login?error=1")
+            if webguard.needs_2fa(state.cfg, u, g.home, False):
+                if not u.get("totp"):
+                    audit(f"login refused for {u['username']}: two-factor needed from outside, not set up")
+                    return redirect("/login?error=2fa_setup")
+                session.clear()
+                session["pending"] = {"uid": u["id"], "t": time.time()}
+                return redirect("/login?step=code")
+            _sign_in(u)
+            audit(f"login: {u['username']} (password, {'home' if g.home else 'outside ' + g.client['ip']})")
+            return redirect("/")
         return send_from_directory(STATIC, "login.html")
+
+    @app.post("/login/code")
+    def login_code():
+        p = session.get("pending") or {}
+        u = users.get(p.get("uid"))
+        if not u or time.time() - float(p.get("t", 0)) > 300:
+            session.clear()
+            return redirect("/login?error=expired")
+        if lockout.blocked(g.client["ip"], u["username"]):
+            return redirect("/login?error=locked")
+        ok, counter = webguard.check_user_code(u, request.form.get("code", ""))
+        if not ok:
+            _failed(u["username"], "2fa code")
+            return redirect("/login?step=code&error=code")
+        users.update(u["id"], totp_last=counter)
+        _sign_in(users.get(u["id"]), mfa=True)
+        audit(f"login: {u['username']} (password + code, {'home' if g.home else 'outside ' + g.client['ip']})")
+        return redirect("/")
 
     def _sso_buttons():
         return [{"key": p["_key"], "label": p["_label"], "provider": p.get("provider") or "other"} for p in oidc.providers(state.cfg)]
@@ -488,8 +586,8 @@ def create_app(state: State, password: str | None) -> Flask:
         if u.get("disabled"):
             return _sso_page("This account is switched off. Ask the owner.", ok=False), 403
         users.update(u["id"], last_login=time.strftime("%Y-%m-%dT%H:%M"))
-        _sign_in(u)
-        audit(f"login: {u['username']} (single sign-on, {prov['_label']})")
+        _sign_in(users.get(u["id"]), mfa=bool(webguard.settings(state.cfg)["sso_counts_as_2fa"]), via="sso")
+        audit(f"login: {u['username']} (single sign-on, {prov['_label']}, {'home' if g.home else 'outside ' + g.client['ip']})")
         return _sso_page("Signed in. Opening Jarvis...", ok=True)
 
     # ------------------------------------------------------------ invitations
@@ -498,22 +596,59 @@ def create_app(state: State, password: str | None) -> Flask:
     def invite_page(token):
         return send_from_directory(STATIC, "invite.html")
 
+    def _invite_needs_2fa(inv) -> bool:
+        return webguard.needs_2fa(state.cfg, {"role": inv["role"]}, g.home, False)
+
     @app.get("/api/invite/<token>")
     def invite_info(token):
+        if lockout.blocked(g.client["ip"]):
+            return jsonify(ok=False, error="Too many tries. Wait 15 minutes."), 429
         inv = invites.find(token)
         if not inv:
+            _failed(None, "invitation link")
             return jsonify(ok=False, error="This invitation has expired or was already used. Ask for a new one."), 404
         return jsonify(ok=True, email=inv["email"], name=inv.get("name") or "", role=inv["role"], invited_by=inv.get("invited_by"),
                        providers=_sso_buttons(), password=password_login_allowed() or not oidc.providers(state.cfg) or inv["role"] == "admin",
-                       suggested=_free_username(inv["email"].split("@")[0]))
+                       suggested=_free_username(inv["email"].split("@")[0]), needs_2fa=_invite_needs_2fa(inv))
+
+    @app.post("/api/invite/<token>/2fa")
+    def invite_2fa(token):
+        """A new authenticator secret for someone accepting an invitation from outside (shown as a QR code)."""
+        import io
+        import segno
+        from ..totp import new_secret, uri
+        if request.headers.get("X-Jarvis") != "1":
+            abort(403)
+        inv = invites.find(token)
+        if not inv:
+            return jsonify(ok=False, error="This invitation has expired or was already used."), 404
+        secret = new_secret()
+        totp_drafts[inv["hash"]] = (secret, time.time())
+        link = uri(secret, f"Jarvis:{inv['email']}")
+        buf = io.BytesIO()
+        segno.make(link, error="m").save(buf, kind="svg", scale=4, border=2, dark="#000000", light="#ffffff")
+        return jsonify(ok=True, secret=secret, uri=link, qr=buf.getvalue().decode())
 
     @app.post("/api/invite/<token>")
     def invite_accept(token):
         if request.headers.get("X-Jarvis") != "1":
             abort(403)
+        if lockout.blocked(g.client["ip"]):
+            return jsonify(ok=False, error="Too many tries. Wait 15 minutes.")
         inv = invites.find(token)
         if not inv:
+            _failed(None, "invitation link")
             return jsonify(ok=False, error="This invitation has expired or was already used. Ask for a new one.")
+        totp_secret, counter = None, None
+        if _invite_needs_2fa(inv):
+            draft = totp_drafts.get(inv["hash"])
+            if not draft or time.time() - draft[1] > 900:
+                return jsonify(ok=False, error="Set up the authenticator code first (step above).", needs_2fa=True)
+            ok, counter = webguard.check_user_code({"totp": draft[0]}, (request.json or {}).get("code", ""))
+            if not ok:
+                _failed(None, "invitation 2fa code")
+                return jsonify(ok=False, error="That code didn't work. Use the current one from your authenticator app.", needs_2fa=True)
+            totp_secret = draft[0]
         if not (password_login_allowed() or not oidc.providers(state.cfg) or inv["role"] == "admin"):
             return jsonify(ok=False, error="Please use the single sign-on button.")
         b = request.json or {}
@@ -526,8 +661,10 @@ def create_app(state: State, password: str | None) -> Flask:
         if not invites.use(token, u["id"]):  # someone was faster with the same link
             users.delete(u["id"])
             return jsonify(ok=False, error="This invitation was just used. Ask for a new one.")
-        users.update(u["id"], invited=True, last_login=time.strftime("%Y-%m-%dT%H:%M"))
-        _sign_in(u)
+        users.update(u["id"], invited=True, last_login=time.strftime("%Y-%m-%dT%H:%M"),
+                     **({"totp": totp_secret, "totp_last": counter} if totp_secret else {}))
+        totp_drafts.pop(inv["hash"], None)
+        _sign_in(users.get(u["id"]), mfa=bool(totp_secret))
         audit(f"invitation accepted: {u['username']} ({u['role']}, invited by {inv.get('invited_by')})")
         return jsonify(ok=True)
 
@@ -581,7 +718,60 @@ def create_app(state: State, password: str | None) -> Flask:
     def me():
         u = g.user
         return jsonify(user=users.public(u) if u.get("id") else {**OWNER, "has_password": False}, auth=auth_required(),
-                       roles=users.ROLES)
+                       roles=users.ROLES, home=g.home, ip=g.client["ip"], remote_limited=u.get("role") == "admin" and remote_limited(),
+                       login_2fa=webguard.settings(state.cfg)["login_2fa"])
+
+    @app.post("/api/me/2fa/<action>")
+    def me_2fa(action):
+        """Your own authenticator codes for signing in: start (QR code), confirm (first code), off (a current code)."""
+        import io
+        import segno
+        from ..totp import new_secret, uri
+        u = g.user
+        if not u.get("id"):
+            return jsonify(ok=False, error="Create an account first.")
+        b = request.json or {}
+        if action == "start":
+            secret = new_secret()
+            users.update(u["id"], totp_pending=secret)
+            link = uri(secret, f"Jarvis:{u['username']}")
+            buf = io.BytesIO()
+            segno.make(link, error="m").save(buf, kind="svg", scale=4, border=2, dark="#000000", light="#ffffff")
+            return jsonify(ok=True, secret=secret, qr=buf.getvalue().decode())
+        if action == "confirm":
+            if lockout.blocked(g.client["ip"], u["username"]):
+                return jsonify(ok=False, error="Too many tries. Wait 15 minutes.")
+            ok, counter = webguard.check_user_code({"totp": u.get("totp_pending")}, b.get("code", ""))
+            if not ok:
+                _failed(u["username"], "2fa setup code")
+                return jsonify(ok=False, error="That code didn't work. Check the phone's clock and try the current code.")
+            users.update(u["id"], totp=u["totp_pending"], totp_pending=None, totp_last=counter)
+            session["mfa"] = True
+            audit(f"two-factor sign-in turned on: {u['username']}")
+            return jsonify(ok=True)
+        if action == "off":
+            if lockout.blocked(g.client["ip"], u["username"]):
+                return jsonify(ok=False, error="Too many tries. Wait 15 minutes.")
+            ok, counter = webguard.check_user_code(u, b.get("code", ""))
+            if not ok:
+                _failed(u["username"], "2fa off code")
+                return jsonify(ok=False, error="Enter a current code from your authenticator app to turn it off.")
+            if not g.home and webguard.settings(state.cfg)["login_2fa"] != "off":
+                return jsonify(ok=False, error="Turn this off from home: from outside, your account needs it.")
+            users.update(u["id"], totp=None, totp_last=counter)
+            audit(f"two-factor sign-in turned off: {u['username']}")
+            return jsonify(ok=True)
+        abort(404)
+
+    @app.post("/api/me/signout-all")
+    def me_signout_all():
+        u = g.user
+        if not u.get("id"):
+            return jsonify(ok=False, error="No account.")
+        u = users.update(u["id"], bump_sessions=True)
+        session["sv"] = int(u.get("sv") or 0)  # except this one
+        audit(f"signed out everywhere: {u['username']}")
+        return jsonify(ok=True)
 
     @app.post("/api/me/password")
     def me_password():
@@ -589,14 +779,30 @@ def create_app(state: State, password: str | None) -> Flask:
         u = g.user
         if not u.get("id"):
             return jsonify(ok=False, error="Create an admin account first (Setup > Users).")
+        if lockout.blocked(g.client["ip"], u["username"]):
+            return jsonify(ok=False, error="Too many tries. Wait 15 minutes.")
         if u.get("pw") and not users.check_password(b.get("current", ""), u["pw"]):
-            time.sleep(1)
+            _failed(u["username"], "current password")
             return jsonify(ok=False, error="Your current password is wrong.")
         try:
-            users.update(u["id"], password=b.get("new", ""))
+            u = users.update(u["id"], password=b.get("new", ""))
         except ValueError as e:
             return jsonify(ok=False, error=str(e))
-        audit(f"password changed: {u['username']}")
+        session["sv"] = int(u.get("sv") or 0)  # this device stays signed in; others have to sign in again
+        audit(f"password changed: {u['username']} (other devices signed out)")
+        return jsonify(ok=True)
+
+    @app.get("/api/security")
+    def security_view():
+        s = webguard.settings(state.cfg)
+        return jsonify(client=g.client, home=g.home, settings={k: s[k] for k in ("trusted_proxies", "home_networks", "remote_admin",
+                       "login_2fa", "sso_counts_as_2fa", "outside_session_hours")}, failures=lockout.recent()[:30],
+                       users_without_2fa=[x["username"] for x in users.all_users() if not x.get("totp") and not x.get("oidc_sub") and not x.get("disabled")])
+
+    @app.post("/api/security/unlock")
+    def security_unlock():
+        lockout.__init__()
+        audit("lockouts cleared")
         return jsonify(ok=True)
 
     @app.get("/api/users")
@@ -718,6 +924,7 @@ def create_app(state: State, password: str | None) -> Flask:
         if not text:
             abort(400)
         job = Job(text)
+        job.remote = g.user.get("role") == "admin" and remote_limited()
         job.user = g.user if g.user.get("role") == "family" else None
         job.origin = None if not g.user.get("id") or g.user["role"] == "admin" else g.user.get("name")
         state.jobs[job.id] = job

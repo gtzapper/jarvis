@@ -90,6 +90,7 @@ class Api(private val prefs: Prefs) {
                 c.outputStream.use { it.write(raw ?: body!!.toByteArray()) }
             }
             val code = c.responseCode
+            lastLocation = c.getHeaderField("Location") ?: ""
             c.headerFields.entries.firstOrNull { it.key.equals("Set-Cookie", true) }?.value
                 ?.firstOrNull { it.startsWith("session=") }
                 ?.let { prefs.cookie = it.substringBefore(";") }
@@ -112,6 +113,9 @@ class Api(private val prefs: Prefs) {
         call(path, "POST", json.toString()).let { (c, t) -> check(c, t) }
 
     /** Point the app at a Jarvis and log in. Returns null on success, else a message for the person. */
+    /** Where the last answer redirected to (the sign-in form says what went wrong this way). */
+    @Volatile var lastLocation: String = ""
+
     fun connect(server: String, password: String, username: String = ""): String? {
         var url = server.trim().trimEnd('/')
         if (!url.startsWith("http://") && !url.startsWith("https://")) url = "http://$url"
@@ -125,7 +129,13 @@ class Api(private val prefs: Prefs) {
         if (password.isEmpty()) return "This Jarvis needs you to sign in. Enter your password above, or use single sign-on."
         call("/login", "POST", "username=" + URLEncoder.encode(username.trim(), "UTF-8") + "&password=" + URLEncoder.encode(password, "UTF-8"),
              "application/x-www-form-urlencoded")
-        if (prefs.cookie == null) return "Wrong username or password."
+        when {
+            "step=code" in lastLocation -> { prefs.cookie = null; return "This account asks for an authenticator code. Tap Sign in above and enter it there." }
+            "error=2fa_setup" in lastLocation -> return "From outside home this account needs an authenticator code, and it doesn't have one yet. Set it up at home (your account, bottom of the menu), or use single sign-on."
+            "error=locked" in lastLocation -> return "Too many failed attempts. Wait 15 minutes."
+            "error=sso" in lastLocation -> return "This account signs in with single sign-on. Tap Sign in above."
+        }
+        if (prefs.cookie == null || "error=" in lastLocation) return "Wrong username or password."
         return if (call("/api/mode").first == 200) null else "Logged in, but Jarvis still said no. Try again."
     }
 

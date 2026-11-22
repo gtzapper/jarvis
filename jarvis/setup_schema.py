@@ -392,6 +392,22 @@ SERVICES: list[Service] = [
                     Field("password_login", "Allow passwords", "bool", default=True,
                           help="Off = everyone but admins must use single sign-on. Admins can always use a password, so you can't lock yourself out"),
                     Field("invite_days", "Invitation links expire after (days)", "int", default=7)]),
+    Service("internet", "Internet access & security", "Jarvis", ("internet",),
+            help="For reaching Jarvis from outside your home. Best: use your VPN (WireGuard on pfSense, or Tailscale) and leave this "
+                 "alone. If you put Jarvis behind a reverse proxy or tunnel (Cloudflare Tunnel, Traefik, Nginx Proxy Manager, Caddy), "
+                 "list the proxy's address below, or Jarvis can't tell who's at home and treats everyone as outside.",
+            fields=[Field("trusted_proxies", "Reverse proxy / tunnel addresses", "list",
+                          help="The IP of your proxy or cloudflared container, e.g. 10.0.20.15 or 172.18.0.0/16. Only these may say who the real visitor is"),
+                    Field("home_networks", "Home and VPN networks", "list",
+                          help="Blank = all private ranges (10.x, 172.16-31.x, 192.168.x) plus Tailscale (100.64.0.0/10)"),
+                    Field("remote_admin", "Admins away from home", "choice", default="limited", options=["limited", "full"],
+                          help="limited = no Setup, users, shell commands, reboots, updates or deleting from outside (chat, status, planner and media work)"),
+                    Field("login_2fa", "Authenticator code at sign-in", "choice", default="outside", options=["outside", "always", "off"],
+                          help="outside = password sign-ins from outside need a code. People set it up under their account (bottom of the menu)"),
+                    Field("sso_counts_as_2fa", "Single sign-on counts as two-factor", "bool", default=True,
+                          help="On if your provider (Authentik...) already asks for a second factor"),
+                    Field("outside_session_hours", "Sign-ins from outside last (hours)", "int", default=72),
+                    Field("alerts", "Tell me about new sign-ins from outside and lockouts", "bool", default=True)]),
     Service("smtp", "Outgoing email (SMTP)", "Jarvis", ("smtp",), test=_t_smtp,
             help="Lets Jarvis send email from itself: invitations to create an account. Gmail: smtp.gmail.com, 587, STARTTLS, your "
                  "address and an app password. Outlook.com: smtp-mail.outlook.com, 587. Proton: your Bridge or SMTP token. "

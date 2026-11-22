@@ -57,6 +57,7 @@ def public(u: dict | None) -> dict | None:
         return None
     return {"id": u["id"], "username": u["username"], "name": u.get("name") or u["username"], "role": u["role"],
             "has_password": bool(u.get("pw")), "sso": bool(u.get("oidc_sub")), "email": u.get("email") or "",
+            "has_2fa": bool(u.get("totp")),
             "disabled": bool(u.get("disabled")), "created": u.get("created"), "last_login": u.get("last_login"),
             "chat": {k: v for k, v in (u.get("chat") or {}).items()}}
 
@@ -125,12 +126,16 @@ def update(uid: str, **changes) -> dict:
             if pw and len(pw) < 8:
                 raise ValueError("Passwords need at least 8 characters")
             u["pw"] = hash_password(pw) if pw else None
+            u["sv"] = int(u.get("sv") or 0) + 1  # a new password signs out everywhere else
         if "username" in changes:
             name = _clean_username(changes.pop("username"))
             if any(x["username"].lower() == name and x["id"] != uid for x in users):
                 raise ValueError(f"There's already a user called {name}")
             u["username"] = name
-        for k in ("name", "role", "email", "oidc_sub", "disabled", "last_login", "chat", "invited"):
+        if changes.pop("bump_sessions", False):
+            u["sv"] = int(u.get("sv") or 0) + 1  # every other signed-in device has to sign in again
+        for k in ("name", "role", "email", "oidc_sub", "disabled", "last_login", "chat", "invited", "totp", "totp_last",
+                  "totp_pending", "seen_ips"):
             if k in changes:
                 u[k] = changes[k]
         _save(users)

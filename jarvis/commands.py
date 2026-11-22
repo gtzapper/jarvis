@@ -122,6 +122,7 @@ class Assistant:
         self.user = user  # a family member's account limits what this assistant can do; None = the owner
         self.family = bool(user and user.get("role") == "family")
         self.uid = user["id"] if self.family else None  # whose reminders and notes
+        self.remote = False  # set per request: an admin away from home (no shell, reboots, updates, deleting)
         self.stack = stack if stack is not None else MediaStack(cfg)
         self.confirm = confirm
         self.confirm_code = ask_yes_with_code  # destructive actions when two-factor approval is on
@@ -240,6 +241,10 @@ class Assistant:
         # Keep the original case: shell commands and paths are case-sensitive.
         t = re.sub(r"^((hey|ok) )?jarvis[,:]?\s*|^please\s+|\s*please$|\?+$", "", text.strip(), flags=re.IGNORECASE).strip()
         rule = next(((fn, m) for pattern, fn in self.rules if (m := pattern.match(t))), None)
+        if rule and self.remote:
+            from .webguard import REMOTE_BLOCKED_COMMANDS
+            if rule[0].__name__ in REMOTE_BLOCKED_COMMANDS:
+                return "That only works from home or over your VPN, so I didn't do it. (Setup > Internet access & security.)"
         if rule and (not self.brain or rule[0] in self.direct):
             return self._call(*rule)
         if self.brain:
@@ -279,6 +284,10 @@ class Assistant:
                'outward'     sends something in your name (an email): always asks, whatever the mode"""
         from .audit import audit
         mode = self.mode
+        if self.remote and level == "destructive":
+            what = doing or question.splitlines()[0].split("?")[0]
+            audit(f"BLOCKED (admin away from home): {what}")
+            raise Blocked("Destructive actions only work from home or over your VPN.")
         if self.family and level in ("destructive", "outward", "change"):
             what = doing or question.splitlines()[0].split("?")[0]
             audit(f"BLOCKED (family account {self.user.get('username')}): {what}")

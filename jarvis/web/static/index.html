@@ -212,6 +212,8 @@ select.select, input[type=text], input[type=password], input[type=number], input
   .grid { grid-template-columns: 1fr; }
 }
 body.family [data-admin] { display: none !important; }
+body.away [data-home-only] { display: none !important; }
+.awaynote { margin: 0 0 10px; padding: 8px 12px; border-radius: 10px; background: color-mix(in srgb, var(--warn) 14%, transparent); font-size: 13px; }
 .me { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 10px; cursor: pointer; color: var(--muted); background: none; border: 0; font: inherit; width: 100%; text-align: left; }
 .me:hover { background: var(--panel2); color: var(--text); }
 .me .av { width: 28px; height: 28px; border-radius: 50%; background: var(--accent); color: var(--accent-text); display: grid; place-items: center; font-weight: 700; flex: none; }
@@ -230,7 +232,7 @@ body.family [data-admin] { display: none !important; }
     <button data-view="places" data-admin><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21s-7-6.2-7-11a7 7 0 0 1 14 0c0 4.8-7 11-7 11z"/><circle cx="12" cy="10" r="2.5"/></svg><span>Places</span></button>
     <button data-view="devices" data-admin><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v10H4zM2 19h20M9 15v4M15 15v4"/></svg><span>Devices</span></button>
     <button data-view="activity" data-admin><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg><span>Activity</span></button>
-    <button data-view="setup" data-admin><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg><span>Setup</span></button>
+    <button data-view="setup" data-admin data-home-only><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg><span>Setup</span></button>
     <div class="spacer"></div>
     <button class="me" id="mebtn" hidden title="Your account"></button>
     <button id="logout" hidden>Log out</button>
@@ -350,6 +352,7 @@ body.family [data-admin] { display: none !important; }
         <div class="card" id="twofacard"></div>
       </div>
       <div class="card" id="userscard" style="margin-top:12px"></div>
+      <div class="card" id="securitycard" style="margin-top:12px"></div>
       <div class="card" id="discovercard" style="margin-top:12px"></div>
     </section>
   </main>
@@ -672,6 +675,7 @@ async function loadSetup() {
   loadDevicesCard();
   loadTwoFA();
   loadUsers();
+  loadSecurity();
   renderTiles();
   if (openSvc && $("#svcdialog").open) openService(openSvc, true);
 }
@@ -1561,9 +1565,38 @@ function accountDialog() {
     const r = await api("/api/me/password", { current: cur.value, new: nw.value });
     res.className = "result " + (r.ok ? "ok" : "bad"); res.textContent = r.ok ? "Password changed." : r.error; if (r.ok) { cur.value = nw.value = ""; }
   } }, "Change password");
+  const tfa = el("div");
+  const drawTfa = () => {
+    const out = el("p", { class: "result" });
+    if (ME.has_2fa) {
+      const code = el("input", { placeholder: "Current code to turn it off", inputmode: "numeric", autocomplete: "one-time-code" });
+      put(tfa, el("p", { class: "help", style: "margin:0 0 6px" }, "On: password sign-ins ask for a code from your authenticator app."),
+        code, el("button", { class: "btn", onclick: async () => { const r = await api("/api/me/2fa/off", { code: code.value });
+          out.className = "result " + (r.ok ? "ok" : "bad"); out.textContent = r.ok ? "Turned off." : r.error; if (r.ok) { ME.has_2fa = false; setTimeout(drawTfa, 900); } } }, "Turn off"), out);
+    } else {
+      put(tfa, el("p", { class: "help", style: "margin:0 0 6px" }, ME.login_2fa === "off" ? "Optional: a code from an authenticator app when you sign in with your password."
+          : "Needed to sign in with your password from outside home" + (ME.login_2fa === "always" ? " (and at home too)" : "") + ". Single sign-on doesn't need it."),
+        el("button", { class: "btn primary", onclick: async () => {
+          const r = await api("/api/me/2fa/start", {});
+          if (!r.ok) { out.className = "result bad"; out.textContent = r.error; return; }
+          const qr = el("div", { style: "background:#fff;border-radius:8px;padding:8px;text-align:center;margin:6px 0" }); qr.innerHTML = r.qr;
+          const code = el("input", { placeholder: "6-digit code from the app", inputmode: "numeric", autocomplete: "one-time-code" });
+          put(tfa, el("p", { class: "help", style: "margin:0" }, "Scan with Google Authenticator, Aegis, 1Password, Microsoft Authenticator..., then type the code it shows."),
+            qr, el("code", { style: "font-size:11px;word-break:break-all" }, r.secret), code,
+            el("button", { class: "btn primary", onclick: async () => { const c = await api("/api/me/2fa/confirm", { code: code.value });
+              out.className = "result " + (c.ok ? "ok" : "bad"); out.textContent = c.ok ? "Two-factor sign-in is on." : c.error; if (c.ok) { ME.has_2fa = true; setTimeout(drawTfa, 1200); } } }, "Turn on"), out);
+        } }, "Set up authenticator codes"), out);
+    }
+  };
+  if (ME.id) drawTfa();
+  const outAll = el("p", { class: "result" });
   put(dlg, el("div", { style: "padding:18px;max-width:380px" },
-    el("h2", { style: "margin:0 0 4px" }, ME.name), el("p", { class: "help" }, `${ME.username} · ${ME.role === "admin" ? "Admin" : "Family"}${ME.sso ? " · signed in with single sign-on" : ""}`),
-    ME.id ? [el("div", { class: "day-head" }, ME.has_password ? "Change password" : "Set a password"), cur, nw, save, res] :
+    el("h2", { style: "margin:0 0 4px" }, ME.name), el("p", { class: "help" }, `${ME.username} · ${ME.role === "admin" ? "Admin" : "Family"}${ME.sso ? " · single sign-on" : ""} · ${ME.home ? "at home" : "outside home (" + ME.ip + ")"}`),
+    ME.id ? [el("div", { class: "day-head" }, ME.has_password ? "Change password" : "Set a password"), cur, nw, save, res,
+      el("div", { class: "day-head" }, "Two-factor sign-in"), tfa,
+      el("div", { class: "day-head" }, "Devices"),
+      el("button", { class: "btn", onclick: async () => { const r = await api("/api/me/signout-all", {}); outAll.className = "result " + (r.ok ? "ok" : "bad");
+        outAll.textContent = r.ok ? "Signed out on every other device and browser." : r.error; } }, "Sign out everywhere else"), outAll] :
       el("p", { class: "help" }, "No accounts yet. Add yourself in Setup > Users."),
     el("div", { class: "row", style: "margin-top:12px;justify-content:space-between" },
       el("button", { class: "btn", onclick: () => dlg.close() }, "Close"),
@@ -1639,11 +1672,33 @@ async function loadUsers() {
     el("details", { style: "margin-top:12px" }, el("summary", { class: "help", style: "cursor:pointer" }, "Or create an account yourself"),
       el("div", { class: "row", style: "gap:6px;flex-wrap:wrap;margin-top:8px" }, name, user, pw, role, add), res));
 }
+async function loadSecurity() {
+  const card = $("#securitycard");
+  const d = await api("/api/security");
+  if (!d.client) return;
+  const c = d.client, s = d.settings;
+  const warn = c.untrusted_forward ? el("p", { class: "result bad" }, "This request came through a proxy or tunnel that isn't listed in Setup > Internet access & security. Jarvis can't tell who's really asking, so everyone counts as outside. Add the proxy's address there.") : null;
+  put(card, el("div", { class: "row", style: "justify-content:space-between" }, el("strong", {}, "Security"),
+      el("button", { class: "btn", onclick: () => openService("internet") }, "Settings")),
+    el("p", { class: "help", style: "margin:4px 0 8px" }, "For reaching Jarvis from outside. A VPN (WireGuard on pfSense, Tailscale) is the safest way; a reverse proxy or tunnel works too with the settings here."),
+    warn,
+    el("div", { class: "item" }, el("div", { class: "grow" }, el("div", {}, `You: ${c.ip} · ${d.home ? "home network" : "outside"}${c.via_proxy ? " · via your proxy" : ""} · ${c.https ? "HTTPS" : "plain HTTP"}`),
+      el("div", { class: "when" }, `Admins away from home: ${s.remote_admin} · Codes at sign-in: ${s.login_2fa} · Outside sign-ins last ${s.outside_session_hours} h · Proxies: ${(s.trusted_proxies || []).join(", ") || "none listed"}`))),
+    d.users_without_2fa.length && s.login_2fa !== "off" ? el("p", { class: "help" }, `No authenticator codes yet (they can't sign in with a password from outside): ${d.users_without_2fa.join(", ")}.`) : null,
+    el("div", { class: "day-head" }, "Recent failed sign-ins"),
+    d.failures.length ? d.failures.slice(0, 10).map(f => el("div", { class: "item" }, el("span", { class: "dot k-overdue" }),
+      el("div", { class: "grow" }, el("div", {}, `${f.ip}${f.user ? " · " + f.user : ""}`), el("div", { class: "when" }, `${f.at} · ${f.what}`)))) : el("p", { class: "help" }, "None since Jarvis started."),
+    d.failures.length ? el("button", { class: "btn", onclick: async () => { await api("/api/security/unlock", {}); loadSecurity(); } }, "Clear lockouts") : null);
+}
 async function loadMe() {
   try {
     const d = await api("/api/me");
-    ME = d.user || ME;
+    ME = Object.assign(d.user || ME, { home: d.home, ip: d.ip, login_2fa: d.login_2fa, remote_limited: d.remote_limited });
     document.body.classList.toggle("family", isFamily());
+    document.body.classList.toggle("away", !!d.remote_limited);
+    if (d.remote_limited && !document.querySelector(".awaynote")) {
+      document.querySelector("main").prepend(el("div", { class: "awaynote" }, `You're signed in from outside home (${d.ip}). Setup, users, shell commands, reboots, updates and deleting are switched off until you're home or on your VPN.`));
+    }
     if (d.auth) {
       const b = $("#mebtn"); b.hidden = false;
       put(b, el("span", { class: "av" }, (ME.name || "?")[0].toUpperCase()), el("span", { style: "overflow:hidden;text-overflow:ellipsis;white-space:nowrap" }, ME.name));
@@ -1662,6 +1717,7 @@ $("#logout").onclick = async () => { await api("/logout", {}); location.href = "
   const asked = new URLSearchParams(location.search).get("view");  // app shortcuts: Chat / Lab status
   if (asked && document.getElementById(asked)) start = asked;
   if (isFamily() && !["chat", "planner", "media"].includes(start)) start = "chat";
+  if (ME.remote_limited && start === "setup") start = "dashboard";
   show(start);
 })();
 if ("serviceWorker" in navigator && window.isSecureContext) navigator.serviceWorker.register("/sw.js").catch(() => {});

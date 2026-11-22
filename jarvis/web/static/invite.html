@@ -51,14 +51,27 @@ fetch("/api/invite/" + encodeURIComponent(token)).then(r => r.json()).then(d => 
       <label>Your name</label><input id="name" value="${esc(d.name)}" autocomplete="name">
       <label>Username</label><input id="username" value="${esc(d.suggested)}" autocapitalize="none" spellcheck="false" autocomplete="username">
       <label>Password (8 or more characters)</label><input id="password" type="password" autocomplete="new-password">
+      ${d.needs_2fa ? `<label>Authenticator code</label>
+        <p style="margin:0 0 8px">You're joining from outside the home network, so this account uses a code from an authenticator app
+        (Google Authenticator, Aegis, 1Password, Microsoft Authenticator...). <a href="#" id="qrbtn">Show the QR code</a>, scan it, then type the code.</p>
+        <div id="qr" style="background:#fff;border-radius:8px;display:none;text-align:center;padding:8px;margin-bottom:8px"></div>
+        <input id="code" inputmode="numeric" autocomplete="one-time-code" placeholder="6-digit code">` : ""}
       <button id="go">Create my account</button>`;
   }
   c.innerHTML = html;
+  const qrbtn = document.getElementById("qrbtn");
+  if (qrbtn) qrbtn.onclick = async e => {
+    e.preventDefault();
+    const r = await fetch("/api/invite/" + encodeURIComponent(token) + "/2fa", { method: "POST", headers: { "X-Jarvis": "1" } }).then(r => r.json());
+    const box = document.getElementById("qr"); box.style.display = "block";
+    box.innerHTML = r.ok ? r.qr + `<div style="color:#333;font:12px monospace;word-break:break-all">${esc(r.secret)}</div>` : esc(r.error);
+  };
   const go = document.getElementById("go");
   if (go) go.onclick = async () => {
     go.disabled = true;
     const r = await fetch("/api/invite/" + encodeURIComponent(token), { method: "POST", headers: { "Content-Type": "application/json", "X-Jarvis": "1" },
-      body: JSON.stringify({ name: document.getElementById("name").value, username: document.getElementById("username").value, password: document.getElementById("password").value }) }).then(r => r.json());
+      body: JSON.stringify({ name: document.getElementById("name").value, username: document.getElementById("username").value, password: document.getElementById("password").value,
+        code: (document.getElementById("code") || {}).value || "" }) }).then(r => r.json());
     if (r.ok) { location.replace("/"); return; }
     const e = document.getElementById("err"); e.hidden = false; e.textContent = r.error; go.disabled = false;
   };
