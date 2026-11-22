@@ -190,7 +190,18 @@ class JarvisViewModel(app: Application) : AndroidViewModel(app) {
     var planner by mutableStateOf<JSONObject?>(null)
         private set
 
-    fun loadPlanner() = viewModelScope.launch { io { api.get("/api/planner?days=31") }?.let { planner = it } }
+    fun loadPlanner() = viewModelScope.launch {
+        io { api.get("/api/planner?days=31") }?.let { planner = it }
+        io { api.get("/api/mail?hours=72") }?.let { mail = it }
+    }
+
+    var mail by mutableStateOf<JSONObject?>(null)
+        private set
+
+    fun checkMailNow() = viewModelScope.launch {
+        io { api.post("/api/mail/check") }
+        io { api.get("/api/mail?hours=72") }?.let { mail = it }
+    }
 
     var phoneCalendar by mutableStateOf(prefs.phoneCalendar)
         private set

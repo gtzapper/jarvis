@@ -90,6 +90,11 @@ def _t_notify(cfg, e):
     return "Test notification sent. Check your phone"
 
 
+def _t_email(cfg, e):
+    from .mail import test_account
+    return test_account(cfg, e)
+
+
 def _t_voice(cfg, e):
     from .voice import test_voice
     return test_voice(cfg)
@@ -230,6 +235,34 @@ SERVICES: list[Service] = [
                     Field("api_key_env", "Voice server API key", "secret", env="VOICE_API_KEY",
                           help="Only if you set API_KEY on the Speaches container"),
                     Field("enabled", "Enabled", "bool", default=True)]),
+    Service("email", "Email accounts", "Email", ("email",), multi=True, test=_t_email,
+            help="Jarvis reads new mail read-only (never marks, moves, deletes or sends) and your LOCAL AI sorts it. "
+                 "Gmail, iCloud, Yahoo, Fastmail, Zoho, AOL: create an app password in the account's security settings and paste it "
+                 "(Gmail: myaccount.google.com/apppasswords, needs 2-Step Verification). Proton: install Proton Mail Bridge on a "
+                 "computer or in Docker, use the address/username and password Bridge shows, server = the Bridge machine, port 1143, "
+                 "STARTTLS, Check certificate off. Outlook/Hotmail/Microsoft 365: Microsoft blocks passwords, so save the entry "
+                 "with your app's client ID, then use Sign in with Microsoft (steps in the README).",
+            fields=[Field("name", "Name", required=True, help="e.g. personal, work"),
+                    Field("provider", "Provider", "choice", default="gmail", options=["gmail", "outlook", "proton", "icloud", "yahoo", "fastmail", "zoho", "aol", "gmx", "other"]),
+                    Field("address", "Email address / username", required=True),
+                    Field("password_env", "App password (not for Outlook)", "secret", env="EMAIL_PASSWORD",
+                          help="An app password, or the Proton Bridge password"),
+                    Field("imap_host", "Mail server (IMAP)", help="Blank = the provider's usual one. Proton: the machine running Bridge"),
+                    Field("imap_port", "Port", "int", help="Blank = the provider's usual one (993; Proton Bridge 1143)"),
+                    Field("security", "Security", "choice", default="", options=["", "ssl", "starttls"],
+                          help="Blank = the provider's usual one"),
+                    Field("verify_tls", "Check certificate", "bool", default=True, help="Turn off only for Proton Bridge on your network"),
+                    Field("folder", "Folder", default="INBOX"),
+                    Field("client_id", "Microsoft app (client) ID (Outlook only)",
+                          help="From your free app registration at entra.microsoft.com (README: Outlook)"),
+                    Field("interval_minutes", "Check every (minutes)", "int", default=15),
+                    Field("notify_important", "Tell me about important mail", "bool", default=True),
+                    Field("enabled", "Enabled", "bool", default=True)]),
+    Service("email_ai", "Email screening AI", "Email", ("email_ai",),
+            help="Which LOCAL model reads your email. Blank uses the AI brain's Ollama settings. Email is never sent to a cloud AI, "
+                 "even if Claude is your AI brain; with no local model, simple rules sort mail without summaries.",
+            fields=[Field("ollama_url", "Ollama address", help="e.g. http://10.0.20.223:11434. Blank = the AI brain's"),
+                    Field("model", "Model", help="e.g. gpt-oss:20b or qwen3:8b. Blank = the AI brain's")]),
     Service("planner", "Reminders & daily report", "Alerts", ("planner",),
             help="How reminders, bill notices and the daily report reach you. ntfy needs Phone alerts (ntfy) set up; the Jarvis "
                  "app shows them as notifications (exact for reminders, otherwise within 15 minutes); listening devices "

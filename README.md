@@ -269,6 +269,36 @@ The link is private: anyone who has it can read your calendar. **New link** repl
 
 Everything is stored in `data/organizer.db` on the Jarvis host.
 
+## Email screening
+Jarvis checks your inboxes every 15 minutes, and your **local AI** sorts each new message: important, personal, bill, newsletter, promotion, notification or spam. It also writes a one-line summary and picks out bills (payee, amount, due date).
+
+- **Read-only.** The mailbox is opened read-only and messages are read without marking them read. Nothing is moved, deleted, flagged or sent.
+- **Local AI only.** Only your Ollama model reads email, even if Claude is your main AI brain. With no local model, simple rules sort mail (no summaries). Setup → Email screening AI picks the model; blank uses the AI brain's Ollama settings. `gpt-oss:20b` does it well.
+- **Nothing kept but the summary.** Jarvis stores sender, subject, date, category and summary, never the message itself.
+- **Email can't give orders.** It's treated as untrusted text: the screening model has no tools and must answer in a fixed format. A message that says "ignore your instructions" just gets filed (in testing, as spam).
+- **Bills go in only with your OK.** Found bills appear in Planner → Email with a due date you can change, **Add** and **×**. Or say `add bill from email 12`.
+- **Important mail** is announced through your reminder channels (Setup → Reminders & daily report). The daily report has an email section.
+- **Chat:** `check my email`, `important emails`. With the AI on, also "anything from the bank this week?"
+
+**Adding accounts** (Setup → Email accounts, add as many as you like):
+
+| Provider | What to enter |
+|---|---|
+| Gmail | Turn on 2-Step Verification, then create an app password at myaccount.google.com/apppasswords and paste it. Your normal password won't work |
+| iCloud | An app-specific password from appleid.apple.com → Sign-In and Security |
+| Yahoo, AOL | Account security → Generate app password |
+| Fastmail, Zoho | An app password from the account's security settings |
+| Proton | Proton has no IMAP of its own: run **Proton Mail Bridge** (the official app, or a Bridge Docker container on the same machine as Jarvis). Use the username and password Bridge shows for the address. Server = the Bridge machine, port 1143, security STARTTLS, **Check certificate** off (Bridge uses its own certificate) |
+| Outlook / Hotmail / Microsoft 365 | Microsoft blocks passwords for mail apps, so Jarvis signs in the Microsoft way. See below |
+| Anything else | Provider **other**, plus the IMAP server, port and security your provider lists |
+
+**Outlook, one-time setup (about 5 minutes):**
+1. Go to entra.microsoft.com (or portal.azure.com) → App registrations → **New registration**. Name it "Jarvis mail". Supported account types: *Accounts in any organizational directory and personal Microsoft accounts*. No redirect URI. Register.
+2. **Authentication** → Advanced settings → *Allow public client flows* → **Yes** → Save.
+3. **API permissions** → Add a permission → *APIs my organization uses* → **Office 365 Exchange Online** → Delegated → `IMAP.AccessAsUser.All` → Add. (Work accounts may need an admin to grant consent, and IMAP must be allowed for the mailbox.)
+4. Copy the **Application (client) ID**. In Jarvis: Setup → Email accounts → provider **outlook** → your address and that client ID → Save.
+5. Click **Sign in with Microsoft**. Jarvis shows a code; open microsoft.com/devicelogin, enter it and approve. Jarvis keeps only the sign-in token (in `.env`) and renews it by itself.
+
 ## Talking to Jarvis (voice)
 **Android app:** tap the mic and speak. Your words appear as you talk, and the answer is read aloud (Settings → Speak replies). The headset button turns on **hands-free**: after each answer Jarvis listens again, so you can keep talking without touching the phone. Say "stop", "that's all" or "thanks" to end it. If nothing is said for a few seconds, it stops listening until you tap the mic.
 

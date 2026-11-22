@@ -267,6 +267,7 @@ select.select, input[type=text], input[type=password], input[type=number], input
           <div class="card" id="upcomingcard" style="margin-top:12px"></div>
         </div>
         <div>
+          <div class="card" id="mailcard" style="margin-bottom:12px"></div>
           <div class="card" id="notescard"></div>
           <div class="card" id="feedcard" style="margin-top:12px"></div>
         </div>
@@ -570,10 +571,14 @@ const SVC_META = {
   provisioning: ["Vm+", "#10b981", "Create VMs from a template with a static IP on pfSense"],
   ai: ["AI", "#d97757", "Talk to Jarvis in plain English (Claude or a local model)"],
   notify: ["nt", "#38bdf8", "Push alerts to your phone with the ntfy app"],
+  email: ["@", "#f43f5e", "Gmail, Outlook, Proton and others: new mail sorted and summarised by your local AI"],
+  email_ai: ["@AI", "#fb7185", "Which local model reads your email (never a cloud AI)"],
+  voice: ["Mic", "#a855f7", "Hey Jarvis: speech-to-text and voice for listening devices"],
+  planner: ["Pl", "#22c55e", "How reminders, bills and the daily report reach you"],
   updates: ["Up", "#94a3b8", "GitHub token, only needed for a private repo"],
   web: ["Wb", "#60a5fa", "Dashboard password and who can open it"],
 };
-const GROUP_ORDER = ["Infrastructure", "Media", "Downloads", "AI & automation", "Alerts", "Jarvis"];
+const GROUP_ORDER = ["Infrastructure", "Media", "Downloads", "AI & automation", "Email", "Alerts", "Jarvis"];
 let setupData = null, setupTab = "All", openSvc = null;
 
 function svcIcon(id, cls = "ico") {
@@ -756,7 +761,7 @@ const isoDay = d => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDa
 async function loadPlanner() {
   plan = await api("/api/planner?days=120");
   if (!planMonth) { const t = new Date(); planMonth = new Date(t.getFullYear(), t.getMonth(), 1); }
-  renderQuickAdd(); renderMonth(); renderUpcoming(); renderNotes(); renderFeed();
+  renderQuickAdd(); renderMonth(); renderUpcoming(); renderNotes(); renderFeed(); loadMail();
 }
 async function planPost(path, body) {
   const r = await api(path, body || {});
@@ -843,6 +848,39 @@ function renderNotes() {
   search.oninput = draw;
   put(card, el("strong", {}, `Notes (${plan.notes.length})`), el("div", { style: "margin:8px 0" }, search), listBox);
   draw();
+}
+async function loadMail() {
+  const card = $("#mailcard");
+  const d = await api("/api/mail?hours=72");
+  if (!d.accounts.length) {
+    put(card, el("strong", {}, "Email"), el("p", { class: "help", style: "margin:4px 0 8px" }, "Connect Gmail, Outlook, Proton or another account and your local AI sorts new mail, flags what matters and spots bills. Read-only: nothing is marked, moved or sent."),
+      el("button", { class: "btn", onclick: () => { show("setup"); setTimeout(() => openService("email"), 400); } }, "Connect an email account"));
+    return;
+  }
+  const who = s => { const m = /^(.*?)\s*<(.+)>$/.exec(s || ""); return m ? (m[1].replace(/^"|"$/g, "") || m[2]) : s; };
+  const imp = d.messages.filter(m => m.important);
+  const bills = d.messages.filter(m => m.bill && !m.bill_state);
+  const counts = {};
+  d.messages.filter(m => !m.important && !m.bill).forEach(m => counts[m.category] = (counts[m.category] || 0) + 1);
+  const errs = d.states.filter(s => s.error);
+  const check = el("button", { class: "btn" }, "Check now");
+  check.onclick = async () => { check.disabled = true; check.textContent = "Checking..."; const r = await api("/api/mail/check", {}); loadMail();
+    const bad = r.results.filter(x => x.error); if (bad.length) alert(bad.map(x => `${x.account}: ${x.error}`).join("\n")); };
+  const billRow = m => {
+    const b = m.bill, due = el("input", { type: "date", value: b.due_date || "", style: "width:auto;flex:0 1 150px", title: "Due date" });
+    return el("div", { class: "item" }, el("span", { class: "dot k-bill" }),
+      el("div", { class: "grow" }, el("div", {}, `${b.payee || who(m.sender)}${b.amount ? ` · ${b.currency || ""} ${Number(b.amount).toFixed(b.amount % 1 ? 2 : 0)}` : ""}`), el("div", { class: "when" }, m.subject)),
+      el("div", { class: "acts" }, due, el("button", { class: "btn", onclick: () => planPost(`/api/mail/${m.id}/bill`, { due: due.value }) }, "Add"),
+        el("button", { class: "btn", title: "Not a bill to track", onclick: () => planPost(`/api/mail/${m.id}/dismiss`) }, "×")));
+  };
+  put(card, el("div", { class: "row", style: "justify-content:space-between" }, el("strong", {}, "Email (last 3 days)"), check),
+    el("p", { class: "help", style: "margin:4px 0 6px" }, d.local_model ? `Sorted by your local model ${d.local_model}.` : "No local AI set, so simple rules sort mail (no summaries). Setup > Email screening AI."),
+    errs.length ? el("p", { class: "result bad" }, errs.map(e => `${e.account}: ${e.error}`).join(" · ")) : null,
+    imp.length ? [el("div", { class: "day-head" }, `Important (${imp.length})`), imp.slice(0, 15).map(m => el("div", { class: "item" }, el("span", { class: "dot k-overdue" }),
+      el("div", { class: "grow" }, el("div", {}, m.summary), el("div", { class: "when" }, `${who(m.sender)} · ${m.subject} · ${m.received.replace("T", " ")}`))))] : null,
+    bills.length ? [el("div", { class: "day-head" }, `Bills found (${bills.length})`), bills.slice(0, 15).map(billRow)] : null,
+    Object.keys(counts).length ? el("p", { class: "help", style: "margin-top:10px" }, "Everything else: " + Object.entries(counts).sort((a, b) => b[1] - a[1]).map(([c, n]) => `${n} ${c}`).join(", ")) : null,
+    !d.messages.length ? el("p", { class: "help" }, "No new mail screened yet. It checks every 15 minutes, or press Check now.") : null);
 }
 function renderFeed() {
   const card = $("#feedcard");
@@ -1017,6 +1055,29 @@ function renderSsh(key) {
     key ? [el("div", { class: "keybox" }, key), copy]
         : el("button", { class: "btn primary", style: "margin-top:10px", onclick: async () => { const r = await api("/api/sshkey", {}); renderSsh(r.public_key); } }, "Create SSH key"));
 }
+function msSignIn(index) {
+  // Outlook: Microsoft's device sign-in. Jarvis shows a code; you enter it on Microsoft's site.
+  const box = el("div", { class: "howto", style: "margin-top:12px" });
+  const start = el("button", { class: "btn primary" }, "Sign in with Microsoft");
+  start.onclick = async () => {
+    start.disabled = true;
+    const r = await api("/api/mail/oauth/start", { index });
+    if (!r.ok) { start.disabled = false; put(box, el("strong", {}, "Microsoft sign-in"), el("p", { class: "result bad" }, r.error), start); return; }
+    put(box, el("strong", {}, "Microsoft sign-in"),
+      el("p", { style: "margin:6px 0" }, "Open ", el("a", { href: r.url, target: "_blank", rel: "noopener" }, r.url), " and enter this code:"),
+      el("div", { class: "keybox", style: "font-size:20px;letter-spacing:3px;text-align:center" }, r.code),
+      el("p", { class: "help", id: "msstate" }, "Waiting for you to approve..."));
+    for (let i = 0; i < 200; i++) {
+      await new Promise(res => setTimeout(res, 3000));
+      const st = await api(`/api/mail/oauth/${r.flow}`);
+      if (st.status === "done") { put(box, el("p", { class: "result ok" }, "Signed in. Jarvis can now read this mailbox (read-only). Use Save & test to check.")); return; }
+      if (st.status === "failed") { start.disabled = false; put(box, el("p", { class: "result bad" }, "Sign-in failed: " + st.error), start); return; }
+    }
+  };
+  put(box, el("strong", {}, "Microsoft sign-in"),
+    el("p", { class: "help", style: "margin:4px 0 8px" }, "Microsoft doesn't allow passwords for mail apps. Save this entry with your app (client) ID first, then sign in here."), start);
+  return box;
+}
 function entryForm(svc, values, index) {
   const inputs = {};
   const fields = svc.fields.map(f => {
@@ -1062,7 +1123,8 @@ function entryForm(svc, values, index) {
     await api(`/api/setup/${svc.id}/delete`, { index }); loadSetup();
   } }, "Remove") : null;
   const title = svc.multi ? el("div", { class: "entry-title" }, values ? (values.name || `${svc.label} ${index + 1}`) : `New ${svc.label}`) : null;
-  return el("div", { class: "entry" }, title, el("div", { class: "fields" }, fields), el("div", { class: "row" }, saveBtn, removeBtn), result);
+  const extra = svc.id === "email" && values && values.provider === "outlook" ? msSignIn(index) : null;
+  return el("div", { class: "entry" }, title, el("div", { class: "fields" }, fields), el("div", { class: "row" }, saveBtn, removeBtn), result, extra);
 }
 
 /* ---------- start ---------- */

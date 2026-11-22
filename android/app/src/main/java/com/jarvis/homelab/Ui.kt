@@ -439,7 +439,8 @@ fun SystemCard(r: JSONObject) {
 fun PlannerScreen(vm: JarvisViewModel) {
     val p = vm.planner
     val c = MaterialTheme.colorScheme
-    var showNotes by rememberSaveable { mutableStateOf(false) }
+    var section by rememberSaveable { mutableStateOf("upcoming") }
+    val showNotes = section == "notes"
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         item {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -454,15 +455,18 @@ fun PlannerScreen(vm: JarvisViewModel) {
         item { PhoneCalendarRow(vm) }
         item {
             SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
-                SegmentedButton(selected = !showNotes, onClick = { showNotes = false }, shape = SegmentedButtonDefaults.itemShape(0, 2)) { Text("Coming up") }
-                SegmentedButton(selected = showNotes, onClick = { showNotes = true }, shape = SegmentedButtonDefaults.itemShape(1, 2)) { Text("Notes") }
+                listOf("upcoming" to "Coming up", "mail" to "Mail", "notes" to "Notes").forEachIndexed { i, (key, label) ->
+                    SegmentedButton(selected = section == key, onClick = { section = key }, shape = SegmentedButtonDefaults.itemShape(i, 3)) { Text(label) }
+                }
             }
         }
         if (p == null) {
             item { Text("Loading...", color = c.onSurfaceVariant) }
             return@LazyColumn
         }
-        if (showNotes) {
+        if (section == "mail") {
+            mailItems(vm)
+        } else if (showNotes) {
             val notes = p.optJSONArray("notes")
             val n = notes?.length() ?: 0
             if (n == 0) item { Text("No notes yet. Say \"note:\" and what to remember.", color = c.onSurfaceVariant) }
@@ -514,6 +518,75 @@ fun PhoneCalendarRow(vm: JarvisViewModel) {
             else if (PhoneCalendar.allowed(context)) vm.usePhoneCalendar(true)
             else ask.launch(arrayOf(Manifest.permission.READ_CALENDAR, Manifest.permission.WRITE_CALENDAR))
         })
+    }
+}
+
+private fun androidx.compose.foundation.lazy.LazyListScope.mailItems(vm: JarvisViewModel) {
+    val d = vm.mail
+    if (d == null) { item { Text("Loading...") }; return }
+    val accounts = d.optJSONArray("accounts")
+    if (accounts == null || accounts.length() == 0) {
+        item { Text("No email accounts yet. Add Gmail, Outlook, Proton or another in the dashboard: Setup > Email accounts.", fontSize = 14.sp) }
+        return
+    }
+    val msgs = d.optJSONArray("messages")
+    val all = (0 until (msgs?.length() ?: 0)).map { msgs!!.getJSONObject(it) }
+    val important = all.filter { it.optInt("important") == 1 }
+    val bills = all.filter { !it.isNull("bill") && it.optString("bill_state").isEmpty() }
+    val model = d.optString("local_model").takeIf { it.isNotEmpty() && it != "null" }
+    item {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(if (model != null) "Sorted by your local model $model. Last 3 days." else "Sorted by simple rules (no local AI set). Last 3 days.",
+                fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f))
+            TextButton({ vm.checkMailNow() }) { Text("Check now") }
+        }
+    }
+    val states = d.optJSONArray("states")
+    for (i in 0 until (states?.length() ?: 0)) {
+        val st = states!!.getJSONObject(i)
+        if (!st.isNull("error")) item { Text("${st.optString("account")}: ${st.optString("error")}", color = MaterialTheme.colorScheme.error, fontSize = 13.sp) }
+    }
+    if (important.isNotEmpty()) {
+        item { Text("IMPORTANT", fontSize = 12.sp, letterSpacing = 0.5.sp, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+        items(important) { m -> MailRow(m, MaterialTheme.colorScheme.error) {} }
+    }
+    if (bills.isNotEmpty()) {
+        item { Text("BILLS FOUND", fontSize = 12.sp, letterSpacing = 0.5.sp, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(top = 8.dp)) }
+        items(bills) { m ->
+            MailRow(m, MaterialTheme.colorScheme.tertiary) {
+                TextButton({ vm.plannerAction("/api/mail/${m.optInt("id")}/bill") }) { Text("Add") }
+                TextButton({ vm.plannerAction("/api/mail/${m.optInt("id")}/dismiss") }) { Text("Ignore") }
+            }
+        }
+    }
+    val rest = all.filter { it.optInt("important") != 1 && it.isNull("bill") }.groupingBy { it.optString("category") }.eachCount()
+    if (rest.isNotEmpty()) item {
+        Text("Everything else: " + rest.entries.sortedByDescending { it.value }.joinToString(", ") { "${it.value} ${it.key}" },
+            fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 8.dp))
+    }
+    if (all.isEmpty()) item { Text("No new mail screened yet. Jarvis checks every 15 minutes.", fontSize = 14.sp) }
+}
+
+@Composable
+fun MailRow(m: JSONObject, color: Color, actions: @Composable () -> Unit) {
+    val c = MaterialTheme.colorScheme
+    val sender = m.optString("sender").let { s -> Regex("^(.*?)\\s*<(.+)>$").find(s)?.let { it.groupValues[1].trim('"').ifEmpty { it.groupValues[2] } } ?: s }
+    val bill = m.optJSONObject("bill")
+    Row(Modifier.fillMaxWidth().background(c.surface, RoundedCornerShape(12.dp)).border(1.dp, c.outline, RoundedCornerShape(12.dp))
+        .padding(horizontal = 12.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+        Box(Modifier.size(10.dp).background(color, CircleShape))
+        Spacer(Modifier.width(10.dp))
+        Column(Modifier.weight(1f)) {
+            if (bill != null) {
+                val amt = if (bill.isNull("amount")) "" else " · ${bill.optString("currency").takeIf { it != "null" } ?: ""} " +
+                    bill.optDouble("amount").let { a -> if (a % 1.0 == 0.0) "%,.0f".format(a) else "%,.2f".format(a) }
+                val due = bill.optString("due_date").takeIf { it.isNotEmpty() && it != "null" }?.let { ", due $it" } ?: ""
+                Text((bill.optString("payee").takeIf { it.isNotEmpty() && it != "null" } ?: sender) + amt + due, fontSize = 15.sp)
+            } else Text(m.optString("summary").ifEmpty { m.optString("subject") }, fontSize = 15.sp)
+            Text("$sender · ${m.optString("subject")}", fontSize = 12.sp, color = c.onSurfaceVariant, maxLines = 2)
+        }
+        actions()
     }
 }
 

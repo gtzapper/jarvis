@@ -38,6 +38,7 @@ HELP = """Things I understand:
   add bill rent 1200 on the 1st monthly / add event dentist on 5 December at 14:30
   mark rent paid                 moves a repeating bill to its next due date
   daily report                   the morning briefing, any time
+  check my email / important emails   what your local AI found in new mail (add bill from email 12)
   search movie dune              look something up (also: show, artist)
   add movie dune                 add it and start searching (also: show, artist)
   search missing movies          ask Radarr/Sonarr/Lidarr to hunt for missing items
@@ -136,9 +137,11 @@ class Assistant:
             (r"^((find|search)( my)? notes?( for| about)?|what did i note about) (?P<q>.+)$", self.find_notes),
             (r"^(agenda|calendar|my calendar|upcoming|what'?s (coming up|on|happening)( this week| today)?|schedule|my schedule)( (?P<days>\d+) days?)?$", self.agenda),
             (r"^(bills|my bills|upcoming bills|bills due|what bills are due|which bills are due)$", self.bills),
-            (r"^(add|new) bill (?P<rest>.+)$", self.add_bill),
+            (r"^(add|new) bill (?!from (e-?mail|mail) )(?P<rest>.+)$", self.add_bill),
             (r"^(add|new) event (?P<rest>.+)$", self.add_event),
             (r"^(mark |i paid |paid )(the )?(?P<name>.+?)( bill)?( as)?( paid)?$", self.mark_paid),
+            (r"^(check (my )?(e-?mails?|inbox|mail)|(my )?(e-?mails?|inbox|mail)( summary)?|any (new |important )?(e-?mails?|mail)|important (e-?mails?|mail))$", self.email_summary),
+            (r"^add (the )?bill from (e-?mail|mail) (?P<n>\d+)$", self.email_bill),
             (r"^(daily report|morning report|my report|briefing|morning briefing|daily briefing|give me my (daily |morning )?(report|briefing))$", self.daily_report),
             (rf"^(search|hunt) (for )?missing (?P<kind>{KIND_WORDS})$", self.search_missing),
             (rf"^(search|find|look ?up) (for )?(the |a )?(?P<kind>{KIND_WORDS}) (?P<q>.+)$", self.search),
@@ -820,6 +823,45 @@ class Assistant:
         from . import organizer as O
         try:
             return O.mark_paid(m.m["name"].strip())
+        except ValueError as e:
+            return str(e)
+
+    def email_summary(self, m) -> str:
+        from email.utils import parseaddr
+        from . import mail
+        from .organizer import money
+        if not self.cfg.get("email"):
+            return "No email accounts set up yet: Setup > Email accounts."
+        rows = mail.recent(int(m["hours"] or 24))
+        if not rows:
+            states = mail.states()
+            errs = [f"{s['account']}: {s['error']}" for s in states if s.get("error")]
+            return "No new email in the last day." + ("\nProblems: " + "; ".join(errs) if errs else "")
+        imp = [r for r in rows if r["important"]]
+        bills = [r for r in rows if r["bill"] and not r["bill_state"]]
+        who = lambda r: parseaddr(r["sender"])[0] or parseaddr(r["sender"])[1]
+        out = [f"{len(rows)} new emails in the last day: {len(imp)} important, {len(bills)} with bills."]
+        if imp:
+            out.append("Important:")
+            out += [f"  {r['id']}. {who(r)}: {r['summary']}" for r in imp[:10]]
+        if bills:
+            out.append("Bills found (say 'add bill from email <number>'):")
+            for r in bills[:10]:
+                b = r["bill"]
+                amt = f" {b.get('currency') or ''} {money(b['amount'])}".replace("  ", " ").rstrip() if b.get("amount") else ""
+                out.append(f"  {r['id']}. {b.get('payee') or who(r)}{amt}" + (f", due {b['due_date']}" if b.get("due_date") else ""))
+        counts = {}
+        for r in rows:
+            if not r["important"] and not r["bill"]:
+                counts[r["category"]] = counts.get(r["category"], 0) + 1
+        if counts:
+            out.append("Everything else: " + ", ".join(f"{n} {c}" for c, n in sorted(counts.items(), key=lambda x: -x[1])) + ".")
+        return "\n".join(out)
+
+    def email_bill(self, m) -> str:
+        from . import mail
+        try:
+            return mail.bill_to_calendar(int(m["n"]))
         except ValueError as e:
             return str(e)
 

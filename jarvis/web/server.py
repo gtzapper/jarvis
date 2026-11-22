@@ -96,7 +96,51 @@ class State:
         reports = mon.reports
         summary = spoken_summary(reports) if reports else None
         alerts = [m for _, m in (mon.events or [])[:10]]
-        return organizer.daily_report(summary, alerts)
+        from .. import mail
+        try:
+            extra = mail.report_lines(24)
+        except Exception:
+            extra = []
+        return organizer.daily_report(summary, alerts, extra)
+
+    def mail_loop(self):
+        """Check each email account on its own schedule; tell the person about important mail and bills."""
+        from email.utils import parseaddr
+        from .. import mail, organizer
+        from ..monitor import Notifier
+        last: dict[str, float] = {}
+        while True:
+            with self.lock:
+                cfg = self.cfg
+            for entry in cfg.get("email") or []:
+                if not entry.get("enabled", True) or not entry.get("name"):
+                    continue
+                every = max(5, int(entry.get("interval_minutes") or 15)) * 60
+                if time.time() - last.get(entry["name"], 0) < every:
+                    continue
+                last[entry["name"]] = time.time()
+                try:
+                    new = mail.check_account(cfg, entry)
+                except Exception as e:
+                    print(f"email {entry['name']}: {e}")
+                    continue
+                if not entry.get("notify_important", True):
+                    continue
+                p = self.planner_cfg()
+                notifier = Notifier(cfg)
+                for r in new:
+                    who = parseaddr(r["sender"])
+                    who = who[0] or who[1]
+                    if r["important"]:
+                        title, text = "Important email", f"{who}: {r['summary']}"
+                    elif r.get("bill"):
+                        title, text = "Bill in your email", f"{who}: {r['summary']} Add it to the calendar in Planner."
+                    else:
+                        continue
+                    organizer.record("mail", title, text)
+                    if p["ntfy"]:
+                        notifier.send(title, text)
+            time.sleep(60)
 
     def scheduler_loop(self):
         """Every 30 seconds: due reminders, bill notices, events starting soon, and the daily report."""
@@ -566,6 +610,98 @@ def create_app(state: State, password: str | None) -> Flask:
         from .. import organizer as O
         return _planner_change(lambda: f"/calendar/{O.reset_feed_token()}.ics", "calendar link replaced")
 
+    # ------------------------------------------------------------ email screening
+
+    @app.get("/api/mail")
+    def mail_view():
+        from .. import mail
+        hours = max(1, min(int(request.args.get("hours", 72)), 24 * 30))
+        with state.lock:
+            accounts = [{"name": e.get("name"), "address": e.get("address"), "provider": e.get("provider"), "enabled": e.get("enabled", True)}
+                        for e in state.cfg.get("email") or []]
+            model = mail.local_model(state.cfg)
+        return jsonify(messages=mail.recent(hours), accounts=accounts, states=mail.states(), local_model=model[1] if model else None)
+
+    @app.post("/api/mail/check")
+    def mail_check_now():
+        from .. import mail
+        with state.lock:
+            cfg = state.cfg
+        results = []
+        for entry in cfg.get("email") or []:
+            if not entry.get("enabled", True):
+                continue
+            try:
+                results.append({"account": entry["name"], "new": len(mail.check_account(cfg, entry))})
+            except Exception as e:
+                results.append({"account": entry.get("name"), "error": str(e)})
+        return jsonify(ok=True, results=results)
+
+    @app.post("/api/mail/<int:mail_id>/bill")
+    def mail_bill(mail_id):
+        from .. import mail
+        b = request.json or {}
+        amount = float(b["amount"]) if str(b.get("amount") or "").strip() else None
+        return _planner_change(lambda: mail.bill_to_calendar(mail_id, b.get("title") or None, amount, b.get("due") or None),
+                               f"bill from email {mail_id} added to the calendar")
+
+    @app.post("/api/mail/<int:mail_id>/dismiss")
+    def mail_dismiss(mail_id):
+        from .. import mail
+        return _planner_change(lambda: mail.dismiss_bill(mail_id), f"bill from email {mail_id} dismissed")
+
+    ms_flows: dict[str, dict] = {}
+
+    @app.post("/api/mail/oauth/start")
+    def mail_oauth_start():
+        """Outlook: Microsoft's device sign-in. Shows a code; the person enters it at microsoft.com/devicelogin."""
+        from .. import mail
+        idx = int((request.json or {}).get("index", -1))
+        accounts = S.load_raw().get("email") or []
+        if not 0 <= idx < len(accounts):
+            return jsonify(ok=False, error="Save the Outlook account first")
+        entry = accounts[idx]
+        if not entry.get("client_id"):
+            return jsonify(ok=False, error="Enter your Microsoft app (client) ID and save first (README: Outlook)")
+        try:
+            dev = mail.ms_device_start(entry["client_id"])
+        except mail.MailError as e:
+            return jsonify(ok=False, error=str(e))
+        flow_id = uuid.uuid4().hex[:10]
+        flow = ms_flows[flow_id] = {"status": "waiting", "error": None}
+
+        def poll():
+            interval, deadline = int(dev.get("interval", 5)), time.time() + int(dev.get("expires_in", 900))
+            while time.time() < deadline:
+                time.sleep(interval)
+                j = mail.ms_device_poll(entry["client_id"], dev["device_code"])
+                if j.get("error") == "authorization_pending":
+                    continue
+                if j.get("error") == "slow_down":
+                    interval += 5
+                    continue
+                if "refresh_token" in j:
+                    from ..audit import audit
+                    name = "EMAIL_MS_TOKEN_" + re.sub(r"[^A-Z0-9]", "_", str(entry.get("name", idx)).upper())
+                    S.set_env(name, j["refresh_token"])
+                    raw = S.load_raw()
+                    raw["email"][idx]["oauth_env"] = name
+                    S._write_raw(raw)
+                    audit(f"email: signed in to Microsoft for {entry.get('name')}")
+                    state.reload()
+                    flow["status"] = "done"
+                    return
+                flow.update(status="failed", error=j.get("error_description", j.get("error", "unknown error"))[:200])
+                return
+            flow.update(status="failed", error="The code expired. Try again.")
+
+        threading.Thread(target=poll, daemon=True).start()
+        return jsonify(ok=True, flow=flow_id, code=dev["user_code"], url=dev.get("verification_uri", "https://microsoft.com/devicelogin"))
+
+    @app.get("/api/mail/oauth/<flow_id>")
+    def mail_oauth_status(flow_id):
+        return jsonify(ms_flows.get(flow_id) or abort(404))
+
     @app.get("/api/report")
     def report():
         return jsonify(text=state.build_report())
@@ -746,6 +882,7 @@ def serve(host: str | None = None, port: int | None = None, monitor: bool = True
     if monitor:
         threading.Thread(target=state.monitor_loop, daemon=True).start()
     threading.Thread(target=state.scheduler_loop, daemon=True).start()
+    threading.Thread(target=state.mail_loop, daemon=True).start()
     from waitress import serve as waitress_serve
     shown = "localhost" if _is_local(host) or host == "0.0.0.0" else host
     print(f"Jarvis dashboard: http://{shown}:{port}" + ("  (also reachable from your network)" if host == "0.0.0.0" else ""))
