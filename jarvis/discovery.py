@@ -128,6 +128,9 @@ class Discovery:
         jobs = []
         for e in entries:
             pve = ProxmoxCollector(e, self.cfg["thresholds"])
+            problem = pve.access_problem()
+            if problem and not pve.can("VM.Audit"):
+                raise ValueError(f"{e['name']}: {problem}")
             must_run = {int(v) for v in e.get("must_run") or []}
             for node in pve._get("/nodes"):
                 if node.get("status") != "online":

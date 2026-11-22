@@ -19,6 +19,7 @@ class ProxmoxCollector:
         self.th = th
         self.must_run = {int(v) for v in cfg.get("must_run", [])}
         self.base = f"https://{cfg['host']}:{cfg.get('port', 8006)}/api2/json"
+        self.token_env = cfg.get("token_id_env")
         token_id, secret = env(cfg.get("token_id_env")), env(cfg.get("token_secret_env"))
         if not token_id or not secret:
             raise ValueError(f"{self.name}: set {cfg.get('token_id_env')} and {cfg.get('token_secret_env')} in .env")
@@ -33,8 +34,44 @@ class ProxmoxCollector:
         r.raise_for_status()
         return r.json()["data"]
 
+    def permissions(self) -> dict:
+        """What this token may do, e.g. {'/': {'Sys.Audit': 1, 'VM.Audit': 1}}. Empty when it has no rights at all."""
+        try:
+            return self._get("/access/permissions") or {}
+        except (requests.RequestException, ValueError, KeyError):
+            return None  # couldn't ask: assume it's fine rather than hide everything
+
+    def can(self, priv: str, perms: dict | None = None) -> bool:
+        perms = self.permissions() if perms is None else perms
+        return perms is None or any(p.get(priv) for p in perms.values())
+
+    def access_problem(self, perms: dict | None = None) -> str | None:
+        """Why Jarvis can't see VMs/containers or node health, with the fix. None when the token has what it needs.
+        Proxmox doesn't refuse a token without rights: it just returns empty lists, so check explicitly."""
+        perms = self.permissions() if perms is None else perms
+        if perms is None:
+            return None
+        missing = [p for p in ("VM.Audit", "Sys.Audit", "Datastore.Audit") if not self.can(p, perms)]
+        if not missing:
+            return None
+        token = env(self.token_env) or "jarvis@pve!monitor"
+        return (f"The Proxmox token has no {', '.join(missing)} permission, so Proxmox hides "
+                + ("the VMs and containers" if "VM.Audit" in missing else "node health and storage")
+                + f" from Jarvis. This usually means the token was made with 'Privilege Separation' ticked. Fix, in the Proxmox "
+                  f"shell: pveum aclmod / -token '{token}' -role PVEAuditor  (or in the web UI: Datacenter > Permissions > Add > "
+                  f"API Token Permission, path /, role PVEAuditor). Then press Test again.")
+
     def collect(self) -> list[Report]:
-        return [self._node(node) for node in self._get("/nodes")]
+        nodes = self._get("/nodes")
+        problem = self.access_problem()
+        reps = [self._node(node) for node in nodes] if not problem or self.can("Sys.Audit") else []
+        if problem:
+            rep = reps[0] if reps else Report(self.name, "proxmox")
+            rep.warn("permissions", problem)
+            rep.lines.insert(0, "Can't see everything: " + problem.split(". This")[0])
+            if not reps:
+                reps = [rep]
+        return reps
 
     def _node(self, node: dict) -> Report:
         n, th = node["node"], self.th
