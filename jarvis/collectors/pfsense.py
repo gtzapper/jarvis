@@ -224,7 +224,10 @@ class PfSenseCollector:
             if not first_run:
                 who = d["hostname"] or "unnamed device"
                 extra = ", private/random MAC (likely a phone or laptop)" if is_random_mac(d["mac"]) else ""
-                rep.events.append(f"New device on {d['interface'] or 'the network'}: {who} at {d['ip']} ({d['mac']}){extra}")
+                msg = f"New device on {d['interface'] or 'the network'}: {who} at {d['ip']} ({d['mac']}){extra}. Say 'name device {d['ip']} as ...' to label it"
+                rep.events.append(msg)
+                from ..security import record_event
+                record_event("new_device", self.name, msg)
         KNOWN_DEVICES.parent.mkdir(exist_ok=True)
         KNOWN_DEVICES.write_text(json.dumps(known, indent=2), encoding="utf-8")
         if first_run:

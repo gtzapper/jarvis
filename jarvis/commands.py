@@ -43,6 +43,7 @@ HELP = """Things I understand:
   remember that my car needs an oil change every 10,000 km / what do you remember / forget oil
   add habit take meds at 21:00 / done meds / habits
   weather / weather tomorrow / will it rain
+  security digest / open ports / internet speed / public ip / name device 10.0.20.44 as Living room TV
   search movie dune              look something up (also: show, artist)
   add movie dune                 add it and start searching (also: show, artist)
   search missing movies          ask Radarr/Sonarr/Lidarr to hunt for missing items
@@ -75,6 +76,12 @@ def ask_yes(question: str) -> bool:
     return input(f"{question} [y/N] ").strip().lower() in ("y", "yes")
 
 
+def ask_yes_with_code(question: str) -> tuple[bool, str]:
+    if not ask_yes(question):
+        return False, ""
+    return True, input("Code from your authenticator app: ").strip()
+
+
 def ask_choice(options: list[str]) -> int | None:
     for i, o in enumerate(options, 1):
         print(f"  {i}. {o}")
@@ -90,6 +97,7 @@ class Assistant:
         self.cfg = cfg
         self.stack = stack if stack is not None else MediaStack(cfg)
         self.confirm = confirm
+        self.confirm_code = ask_yes_with_code  # destructive actions when two-factor approval is on
         self.choose = choose
         self.say = say  # progress updates during long jobs
         self.brain = None
@@ -159,6 +167,11 @@ class Assistant:
             (r"^(done|did|finished|i did|i took|took) (?P<name>.+)$", self.habit_done),
             (r"^(habits|my habits|habit streaks)$", self.habit_list),
             (r"^(weather|what'?s the weather( like)?|forecast|will it rain|is it going to rain)( (?P<when>today|tomorrow))?$", self.weather),
+            (r"^(security digest|security report|security summary|weekly security)$", self.security_digest),
+            (r"^(open ports|port forwards|what'?s open to the internet|exposed ports)$", self.open_ports),
+            (r"^(internet speed|speed test|speedtest|how fast is (the|my) internet|run a speed test)$", self.internet_speed),
+            (r"^(public ip|my ip|what'?s my (public )?ip|external ip)$", self.public_ip),
+            (r"^(name|label|call) device (?P<who>\S+) (as )?(?P<label>.+)$", self.name_device),
             (r"^(daily report|morning report|my report|briefing|morning briefing|daily briefing|give me my (daily |morning )?(report|briefing))$", self.daily_report),
             (rf"^(search|hunt) (for )?missing (?P<kind>{KIND_WORDS})$", self.search_missing),
             (rf"^(search|find|look ?up) (for )?(the |a )?(?P<kind>{KIND_WORDS}) (?P<q>.+)$", self.search),
@@ -219,6 +232,9 @@ class Assistant:
             audit(f"BLOCKED (read-only mode): {what}")
             raise Blocked(f"Read-only mode is on, so this was blocked: {what}. Say 'auto mode' or 'ask mode' to let me make changes.")
         if level == "destructive":
+            from . import totp
+            if totp.enabled(self.cfg):
+                return self._asked(self._confirm_with_code("[destructive] " + question))
             return self._asked(self.confirm("[destructive] " + question))
         if mode == "ask" and level in ("change", "read"):
             return self._asked(self.confirm(question))
@@ -227,6 +243,21 @@ class Assistant:
             self.say(f"{what} (auto mode: not destructive, so I didn't ask)")
             audit(f"AUTO-approved: {what}")
         return True
+
+    def _confirm_with_code(self, question: str) -> bool:
+        """Two-factor approval: yes plus a code from the authenticator app. Three tries."""
+        from . import totp
+        from .audit import audit
+        note = ""
+        for attempt in range(3):
+            yes, code = self.confirm_code(question + note)
+            if not yes:
+                return False
+            if totp.verify(code):
+                return True
+            note = "\n  That code didn't work. Try the current one from your authenticator app."
+        audit(f"2FA: three wrong codes, declined: {question.splitlines()[0][:120]}")
+        return False
 
     def _asked(self, yes: bool) -> bool:
         if not yes:
@@ -986,6 +1017,55 @@ class Assistant:
             return W.describe_day(W.forecast(loc["home"], units), int(day), units)
         except W.WeatherError as e:
             return str(e)
+
+    # ------------------------------------------------------------ security and network
+
+    def security_digest(self, m) -> str:
+        from . import security
+        return security.digest(self.cfg, self.reports_source() if getattr(self, "reports_source", None) else None)
+
+    def open_ports(self, m) -> str:
+        from . import security
+        try:
+            ports = security.open_ports(self.cfg)
+        except Exception as e:
+            return f"Couldn't read the port forwards from pfSense: {e}"
+        if ports is None:
+            return "pfSense isn't set up in Jarvis."
+        return ("Open to the internet (pfSense port forwards):\n" + "\n".join(f"  {p}" for p in ports)) if ports else "Nothing is forwarded from the internet. Good."
+
+    def internet_speed(self, m) -> str:
+        from . import network
+        self.say("Running a speed test (about 35 MB)...")
+        try:
+            r = network.speed_test()
+        except Exception as e:
+            return f"The speed test failed: {e}"
+        hist = network.history()
+        usual = sorted(x["down"] for x in hist[-15:])[len(hist[-15:]) // 2] if len(hist) >= 3 else None
+        return f"{r['down']} Mbps down, {r['up']} Mbps up, {r['ping']} ms." + (f" Usually about {usual:.0f} Mbps down." if usual else "")
+
+    def public_ip(self, m) -> str:
+        from . import network
+        try:
+            return f"Your public IP is {network.public_ip()}."
+        except Exception as e:
+            return str(e)
+
+    def name_device(self, m) -> str:
+        from . import network
+        devices = []
+        try:
+            from .collectors.pfsense import PfSenseCollector
+            for e in self.cfg.get("pfsense") or []:
+                devices += PfSenseCollector(e, self.cfg["thresholds"]).collect_devices()
+        except Exception:
+            pass
+        try:
+            mac = network.name_device(m.m["who"], m.m["label"], devices)
+        except ValueError as e:
+            return str(e)
+        return f"OK, {mac} is now called {m.m['label'].strip()}."
 
     def daily_report(self, m) -> str:
         from . import organizer as O

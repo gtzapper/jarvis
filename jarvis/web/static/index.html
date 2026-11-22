@@ -310,6 +310,7 @@ select.select, input[type=text], input[type=password], input[type=number], input
         <div class="card" id="versioncard"></div>
         <div class="card" id="sshcard"></div>
         <div class="card" id="devicescard"></div>
+        <div class="card" id="twofacard"></div>
       </div>
       <div class="card" id="discovercard" style="margin-top:12px"></div>
     </section>
@@ -419,8 +420,16 @@ function follow(job, b, viaVoice = false) {
       if (viaVoice && !b.dataset.asked) { b.dataset.asked = "1"; voice.waitForTap(job.prompt.type === "confirm" ? "I need your OK on the screen." : "Pick one on the screen."); }
       if (job.prompt.type === "confirm") {
         const risky = job.prompt.question.startsWith("[destructive] ");
+        const codeBox = job.prompt.code ? el("input", { type: "text", inputmode: "numeric", autocomplete: "one-time-code", maxlength: "6", placeholder: "6-digit code", style: "width:130px" }) : null;
+        const yes = async () => {
+          if (codeBox && !/^\d{6}$/.test(codeBox.value.trim())) { codeBox.focus(); return; }
+          b.querySelectorAll("button").forEach(x => x.disabled = true);
+          job = await api(`/api/chat/${job.id}/answer`, codeBox ? { answer: true, code: codeBox.value.trim() } : { answer: true }); render(); poll();
+        };
+        if (codeBox) codeBox.onkeydown = e => { if (e.key === "Enter") yes(); };
         parts.push(risky ? el("div", { class: "warn" }, "Destructive, so I always ask:") : null, el("div", {}, job.prompt.question.replace(/^\[destructive\] /, "")),
-          el("div", { class: "row", style: "margin-top:10px" }, el("button", { class: "btn primary", onclick: () => answer(true) }, "Yes, do it"), el("button", { class: "btn", onclick: () => answer(false) }, "No")));
+          codeBox ? el("div", { class: "help", style: "margin-top:6px" }, "Two-factor approval: enter the code from your authenticator app.") : null,
+          el("div", { class: "row", style: "margin-top:10px" }, codeBox, el("button", { class: "btn primary", onclick: yes }, "Yes, do it"), el("button", { class: "btn", onclick: () => answer(false) }, "No")));
       } else {
         parts.push(el("div", {}, "Which one?"),
           el("div", { class: "choices" }, job.prompt.options.map((o, i) => el("button", { class: "btn", onclick: () => answer(i) }, o)), el("button", { class: "btn", onclick: () => answer(null) }, "Cancel")));
@@ -550,9 +559,9 @@ async function loadDevices() {
 }
 function renderDevices(error) {
   const q = $("#devsearch").value.toLowerCase();
-  const rows = devs.filter(d => !q || [d.ip, d.mac, d.hostname].join(" ").toLowerCase().includes(q));
+  const rows = devs.filter(d => !q || [d.ip, d.mac, d.hostname, d.name].join(" ").toLowerCase().includes(q));
   put($("#devrows"), ...(error ? [el("tr", {}, el("td", { colspan: 5, class: "result bad" }, error))] : []),
-    ...(rows.length ? rows.map(d => el("tr", {}, el("td", {}, d.ip), el("td", {}, d.hostname || "-"), el("td", {}, d.mac), el("td", {}, d.interface),
+    ...(rows.length ? rows.map(d => el("tr", {}, el("td", {}, d.ip), el("td", {}, d.name ? el("strong", {}, d.name) : null, d.name && d.hostname ? el("div", { class: "kind" }, d.hostname) : (d.name ? null : (d.hostname || "-"))), el("td", {}, d.mac), el("td", {}, d.interface),
       el("td", {}, el("span", { class: `pill ${d.online ? "ok" : "mute"}` }, d.online ? "yes" : "no"))))
       : [el("tr", {}, el("td", { colspan: 5, class: "kind" }, devs.length ? "No matches." : "No devices. Is pfSense set up?"))]));
 }
@@ -616,6 +625,7 @@ async function loadSetup() {
   renderStart();
   renderMediaIntro();
   loadDevicesCard();
+  loadTwoFA();
   renderTiles();
   if (openSvc && $("#svcdialog").open) openService(openSvc, true);
 }
@@ -967,6 +977,32 @@ function renderFeed() {
       el("button", { class: "btn", onclick: () => confirm("Make a new link? The old one stops working; add the new one on your phone.") && planPost("/api/planner/feed/reset") }, "New link")));
 }
 
+async function loadTwoFA() {
+  const card = $("#twofacard");
+  const st = await api("/api/2fa");
+  const code = el("input", { type: "text", inputmode: "numeric", maxlength: "6", placeholder: "6-digit code", style: "width:130px" });
+  const msg = el("div", { class: "fhelp" });
+  const head = [el("div", { class: "row", style: "justify-content:space-between" }, el("strong", {}, "Two-factor approval"),
+      el("span", { class: "pill " + (st.enabled ? "ok" : "mute") }, st.enabled ? "On" : "Off")),
+    el("p", { class: "help", style: "margin:4px 0 8px" }, "Destructive actions (reboots, deletes, cleanups) also need the 6-digit code from an authenticator app (Google Authenticator, Aegis, 1Password, Bitwarden...).")];
+  if (st.enabled) {
+    const off = el("button", { class: "btn" }, "Turn off");
+    off.onclick = async () => { const r = await api("/api/2fa/disable", { code: code.value }); if (!r.ok) { msg.className = "fhelp result bad"; msg.textContent = r.error; return; } loadTwoFA(); };
+    put(card, head, el("div", { class: "row" }, code, off), msg);
+    return;
+  }
+  const start = el("button", { class: "btn primary" }, "Set up");
+  start.onclick = async () => {
+    const r = await api("/api/2fa/setup", {});
+    const on = el("button", { class: "btn primary" }, "Turn on");
+    on.onclick = async () => { const x = await api("/api/2fa/enable", { code: code.value }); if (!x.ok) { msg.className = "fhelp result bad"; msg.textContent = x.error; return; } loadTwoFA(); };
+    put(card, head, el("p", { class: "help" }, "1. Scan this with your authenticator app (or type the key). 2. Enter the code it shows."),
+      el("div", { class: "row", style: "align-items:flex-start;gap:12px" }, el("img", { src: r.qr, width: "150", height: "150", alt: "QR code for your authenticator app", style: "border-radius:8px;background:#fff" }),
+        el("div", {}, el("div", { class: "keybox" }, r.secret), el("div", { class: "row" }, code, on), msg)),
+      el("p", { class: "help" }, "Keep the key somewhere safe: if you lose the phone, you'll need it (or edit JARVIS_TOTP_SECRET / two_factor in the config) to approve destructive actions."));
+  };
+  put(card, head, start);
+}
 function renderAppearance() {
   const current = window.JarvisTheme ? JarvisTheme.get() : "system";
   put($("#appearancecard"), el("strong", {}, "Appearance"),

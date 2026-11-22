@@ -282,6 +282,22 @@ SERVICES: list[Service] = [
                     Field("ignore_vmids", "Guest IDs to ignore", "list", help="e.g. 105, 220"),
                     Field("scrub_days", "Warn when a ZFS scrub is older than (days)", "int", default=35),
                     Field("parity_days", "Warn when the Unraid parity check is older than (days)", "int", default=35)]),
+    Service("security_watch", "Login watch & security digest", "Infrastructure", ("security_watch",),
+            help="Reads the SSH login log on each Linux/Unraid machine Jarvis can log into: alerts on logins from new addresses "
+                 "(Jarvis's own are ignored), bursts of failed logins, and new user or admin accounts. Reading the log needs root "
+                 "or passwordless sudo for the Jarvis user. A weekly digest sums up logins, open ports on pfSense, backups and certificates.",
+            fields=[Field("enabled", "Enabled", "bool", default=True),
+                    Field("failed_burst", "Warn after this many failed logins in 30 minutes", "int", default=10),
+                    Field("trusted_ips", "Addresses to never alert on", "list", help="e.g. your PC: 10.0.20.10"),
+                    Field("digest_day", "Weekly digest day", "choice", default="sunday",
+                          options=["off", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]),
+                    Field("digest_time", "Weekly digest time", default="10:00")]),
+    Service("network_watch", "Internet watch", "Infrastructure", ("network_watch",),
+            help="Checks your public IP every 15 minutes (alerts when it changes, handy for VPN or dynamic DNS) and runs a speed "
+                 "test through Cloudflare (about 35 MB each time). Warns when the internet is much slower than usual.",
+            fields=[Field("enabled", "Enabled", "bool", default=True),
+                    Field("speedtest_hours", "Speed test every (hours, 0 = off)", "int", default=12),
+                    Field("slow_percent", "Warn below this % of the usual speed", "int", default=50)]),
     Service("expiry_watch", "Certificates & domains", "Infrastructure", ("expiry_watch",),
             help="Warns before HTTPS certificates or domain registrations expire. Self-signed certificates work too.",
             fields=[Field("hosts", "Websites / services (HTTPS)", "list", help="e.g. nas.example.com, 10.0.20.5:8443"),

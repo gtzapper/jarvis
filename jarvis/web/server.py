@@ -66,6 +66,7 @@ class State:
             self.monitor = Monitor(self.cfg, build_collectors(self.cfg, self.stack))
             self.assistant = Assistant(self.cfg, self.stack)
             self.assistant.report_source = self.build_report
+            self.assistant.reports_source = lambda: list(self.monitor.reports)
         self.wake.set()
 
     def monitor_loop(self):
@@ -162,6 +163,16 @@ class State:
                 for kind, title, text in organizer.due_now() + life.habit_checkins():
                     if p["ntfy"]:
                         notifier.send(title, text)
+                sec = (self.cfg.get("security_watch") or {})
+                day, at = sec.get("digest_day", "sunday"), sec.get("digest_time", "10:00")
+                if day != "off" and time.strftime("%A").lower() == day and organizer.report_due(at, key="digest"):
+                    from .. import security
+                    with self.lock:
+                        reports = list(self.monitor.reports)
+                    text = security.digest(self.cfg, reports)
+                    organizer.record("report", "Security digest", text)
+                    if p["ntfy"]:
+                        notifier.send("Security digest", text)
                 if organizer.report_due(p["report_time"]):
                     text = self.build_report()
                     organizer.record("report", "Daily report", text)
@@ -191,6 +202,11 @@ class State:
         with self.job_lock:
             a = self.assistant
             a.confirm = lambda q: bool(ask({"type": "confirm", "question": q}))
+
+            def confirm_code(q):
+                r = ask({"type": "confirm", "question": q, "code": True})
+                return (bool(r.get("yes")), str(r.get("code") or "")) if isinstance(r, dict) else (False, "")
+            a.confirm_code = confirm_code
             a.choose = lambda options: ask({"type": "choose", "options": options})
             a.say = lambda line: job.progress.append(line)
             if a.brain:
@@ -314,10 +330,12 @@ def create_app(state: State, password: str | None) -> Flask:
         with state.lock:
             entries = list(state.cfg.get("pfsense") or [])
             th = state.cfg["thresholds"]
+        from ..network import device_names
+        names = device_names()
         for e in entries:
             try:
                 for d in PfSenseCollector(e, th).collect_devices():
-                    out.append({**d, "source": e["name"]})
+                    out.append({**d, "source": e["name"], "name": names.get(d["mac"].lower(), "")})
             except Exception as ex:
                 return jsonify(error=f"{e.get('name')}: {ex}", devices=out)
         return jsonify(devices=out)
@@ -355,6 +373,8 @@ def create_app(state: State, password: str | None) -> Flask:
         answer = (request.json or {}).get("answer")
         if job.prompt["type"] == "choose":
             answer = int(answer) if isinstance(answer, int) or str(answer).isdigit() else None
+        elif job.prompt.get("code"):
+            answer = {"yes": answer is True, "code": str((request.json or {}).get("code") or "")}
         else:
             answer = answer is True
         job.answer = answer
@@ -767,6 +787,44 @@ def create_app(state: State, password: str | None) -> Flask:
             return jsonify(ok=True, today=weather.describe_day(data, 0, units), tomorrow=weather.describe_day(data, 1, units))
         except weather.WeatherError as e:
             return jsonify(ok=False, error=str(e))
+
+    # ------------------------------------------------------------ two-factor approval
+
+    @app.get("/api/2fa")
+    def twofa_state():
+        from .. import totp
+        return jsonify(enabled=totp.enabled(state.cfg))
+
+    @app.post("/api/2fa/setup")
+    def twofa_setup():
+        import base64
+        import io
+        import segno
+        from .. import totp
+        secret = totp.start_setup()
+        buf = io.BytesIO()
+        segno.make(totp.uri(secret), error="m").save(buf, kind="svg", scale=5, border=2, dark="#000000", light="#ffffff")
+        return jsonify(ok=True, secret=secret, qr="data:image/svg+xml;base64," + base64.b64encode(buf.getvalue()).decode())
+
+    @app.post("/api/2fa/enable")
+    def twofa_enable():
+        from .. import totp
+        from ..audit import audit
+        if not totp.finish_setup((request.json or {}).get("code", "")):
+            return jsonify(ok=False, error="That code didn't match. Check the time on your phone and try the current code.")
+        audit("2FA: two-factor approval turned on")
+        state.reload()
+        return jsonify(ok=True)
+
+    @app.post("/api/2fa/disable")
+    def twofa_disable():
+        from .. import totp
+        from ..audit import audit
+        if not totp.disable((request.json or {}).get("code", "")):
+            return jsonify(ok=False, error="Wrong code. Turning two-factor off needs a current code.")
+        audit("2FA: two-factor approval turned off")
+        state.reload()
+        return jsonify(ok=True)
 
     @app.get("/api/report")
     def report():

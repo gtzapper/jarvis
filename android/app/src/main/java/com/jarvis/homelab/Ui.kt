@@ -237,7 +237,7 @@ fun ChatScreen(vm: JarvisViewModel) {
     Column(Modifier.fillMaxSize().imePadding()) {
         LazyColumn(Modifier.weight(1f).fillMaxWidth(), state = list, contentPadding = PaddingValues(12.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            itemsIndexed(vm.messages) { i, m -> MessageBubble(m) { value -> vm.answer(i, value) } }
+            itemsIndexed(vm.messages) { i, m -> MessageBubble(m) { value -> if (value is Pair<*, *>) vm.answer(i, value.first, value.second as String) else vm.answer(i, value) } }
         }
         LazyRow(contentPadding = PaddingValues(horizontal = 12.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             item { AssistChip(onClick = { vm.newChat() }, enabled = !vm.busy, label = { Text("new chat") }) }
@@ -336,8 +336,16 @@ fun PromptCard(p: Prompt, onAnswer: (Any?) -> Unit) {
         if (p.type == "confirm") {
             if (p.destructive) Text("Destructive, so I always ask:", color = c.error, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
             Text(p.question, fontSize = 15.sp, lineHeight = 21.sp, color = c.onSurface)
+            var code by remember(p.question) { mutableStateOf("") }
+            if (p.code) {
+                Text("Two-factor approval: enter the code from your authenticator app.", fontSize = 13.sp, color = c.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 6.dp))
+                OutlinedTextField(code, { code = it.filter(Char::isDigit).take(6) }, label = { Text("6-digit code") }, singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword), modifier = Modifier.width(170.dp))
+            }
             Row(Modifier.padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button({ onAnswer(true) }, colors = if (p.destructive) ButtonDefaults.buttonColors(containerColor = c.error) else ButtonDefaults.buttonColors()) {
+                Button({ if (p.code) { if (code.length == 6) onAnswer(true to code) } else onAnswer(true) },
+                    colors = if (p.destructive) ButtonDefaults.buttonColors(containerColor = c.error) else ButtonDefaults.buttonColors()) {
                     Text("Yes, do it")
                 }
                 OutlinedButton({ onAnswer(false) }) { Text("No") }

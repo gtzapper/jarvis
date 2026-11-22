@@ -388,7 +388,7 @@ def due_now(at: datetime | None = None) -> list[tuple[str, str, str]]:
     return out
 
 
-def report_due(report_time: str, at: datetime | None = None) -> bool:
+def report_due(report_time: str, at: datetime | None = None, key: str = "report") -> bool:
     """True once a day, at (or soon after) the configured report time."""
     if not report_time or not re.fullmatch(r"\d{1,2}:\d{2}", report_time):
         return False
@@ -397,7 +397,7 @@ def report_due(report_time: str, at: datetime | None = None) -> bool:
     if (at.hour, at.minute) < (h, m) or at - at.replace(hour=h, minute=m) > timedelta(hours=3):
         return False
     with db() as c:
-        return _once(c, f"report:{at.date()}")
+        return _once(c, f"{key}:{at.date()}")
 
 
 def record(kind: str, title: str, text: str) -> int:

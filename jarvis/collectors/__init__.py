@@ -38,6 +38,15 @@ def build_collectors(cfg: dict, stack: MediaStack | None = None) -> list:
     if watch.get("enabled", True):
         collectors += [_make(BackupCollector, c, th, "backups", watch=watch) for c in cfg.get("proxmox") or []]
         collectors += [_make(UnraidParityCollector, c, th, "parity", watch=watch) for c in cfg.get("unraid") or []]
+    sec = cfg.get("security_watch") or {}
+    if sec.get("enabled", True):
+        from ..security import LoginWatchCollector
+        hosts = [h for h in (cfg.get("linux_hosts") or []) + (cfg.get("unraid") or []) if h.get("os") != "windows" and h.get("host")]
+        collectors += [_make(LoginWatchCollector, h, th, "logins", watch=sec) for h in hosts]
+    net = cfg.get("network_watch") or {}
+    if net.get("enabled", True):
+        from ..network import NetworkWatchCollector
+        collectors.append(NetworkWatchCollector(net, th))
     exp = cfg.get("expiry_watch") or {}
     if exp.get("hosts") or exp.get("domains"):
         collectors.append(ExpiryCollector(exp, th))

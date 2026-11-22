@@ -292,6 +292,20 @@ weather / weather tomorrow / will it rain
   - It all appears on the Dashboard and alerts like any other problem.
 - **Certificates & domains** (Setup → Certificates & domains): list your HTTPS services (self-signed certificates work too) and domains. Jarvis warns 21 days before they expire, and again at 7 days.
 
+## Security watch
+- **SSH login watch** (Setup → Login watch & security digest; on by default):
+  - Reads the SSH login log on every Linux and Unraid machine Jarvis can log into, and alerts on a login from an address it hasn't seen before. Jarvis's own logins and addresses you trust are ignored.
+  - Alerts on bursts of failed logins (10 in half an hour by default), and on new user or admin (sudo) accounts.
+  - Reading the log needs root or passwordless sudo for the Jarvis user.
+- **Weekly security digest** (Sunday 10:00 by default, or `security digest` any time): logins and new source addresses, failed attempts, new accounts, new devices, public IP changes, what's open to the internet (pfSense port forwards) and any open backup or certificate problems.
+- **Internet watch:** the public IP is checked every 15 minutes, with an alert when it changes. A speed test runs through Cloudflare every 12 hours (about 35 MB each, configurable or off), with a warning when the internet is much slower than usual. Chat: `internet speed`, `public ip`, `open ports`.
+- **Device names:** `name device 10.0.20.44 as Living room TV`. The name shows on the Devices page, and new-device alerts tell you how to name them.
+- **Two-factor approval** (Setup → Two-factor approval): destructive actions also need the 6-digit code from an authenticator app (Google Authenticator, Aegis, 1Password, Bitwarden...). Scan the QR code, enter the first code, done.
+  - Each code works once.
+  - Three wrong codes decline the action and are written to the audit log.
+  - Turning it off needs a current code.
+  - Keep the key safe: if you lose the phone, you'll need it, or you can set `two_factor: {enabled: false}` in config.yaml.
+
 ## Email screening
 Jarvis checks your inboxes every 15 minutes, and your **local AI** sorts each new message: important, personal, bill, newsletter, promotion, notification or spam. It also writes a one-line summary and picks out bills (payee, amount, due date).
 

@@ -201,6 +201,12 @@ TOOLS = [
     {"name": "habits", "description": "The user's habits, whether each is done today, and streaks.", "input_schema": _schema({})},
     {"name": "weather", "description": "Weather at the user's home location: day 0 = today, 1 = tomorrow, up to 3.",
      "input_schema": _schema({"day": {"type": "integer"}})},
+    {"name": "security_digest", "description": "This week's security summary: SSH logins (new addresses), failed logins, new accounts "
+     "and devices, pfSense port forwards, and open backup/certificate problems.", "input_schema": _schema({})},
+    {"name": "open_ports", "description": "What's reachable from the internet: the port forwards on pfSense.", "input_schema": _schema({})},
+    {"name": "internet_speed", "description": "Run an internet speed test now (uses about 35 MB). Only when the user asks.", "input_schema": _schema({})},
+    {"name": "name_device", "description": "Give a device on the network a friendly name, by IP or MAC.",
+     "input_schema": _schema({"device": {"type": "string", "description": "IP or MAC"}, "name": {"type": "string"}})},
     {"name": "discover_media", "description": "Find media apps (Plex, Sonarr, Radarr, Lidarr, Prowlarr, Overseerr, qBittorrent, Deluge, "
      "SABnzbd) running in Docker on Unraid and VMs, or installed in Proxmox VMs/LXCs, and whether each is already in Jarvis. "
      "Changes nothing; the user adds them in Setup.", "input_schema": _schema({})},
@@ -221,6 +227,8 @@ PROGRESS = {
     "add_to_list": "Adding to the list", "show_list": "Checking the list", "check_off": "Ticking it off", "remember": "Remembering that",
     "forget": "Forgetting that", "add_habit": "Setting up the habit", "habit_done": "Marking it done", "habits": "Checking your habits",
     "weather": "Checking the weather",
+    "security_digest": "Putting the security summary together", "open_ports": "Checking port forwards on pfSense",
+    "internet_speed": "Running a speed test", "name_device": "Naming the device",
     "add_reminder": "Setting a reminder", "list_reminders": "Checking your reminders", "cancel_reminder": "Cancelling the reminder",
     "add_note": "Saving the note", "search_notes": "Searching your notes", "add_calendar_item": "Adding it to the calendar",
     "agenda": "Checking your calendar", "mark_bill_paid": "Marking it paid", "daily_report": "Putting your report together", "check_updates": "Checking for updates", "install_updates": "Preparing updates",
@@ -390,6 +398,10 @@ class Brain:
             "run_command": lambda: j.run(g(host=a["host"], cmd=a["command"])),
             "check_vm_setup": lambda: j.check_vm_setup(g()),
             "discover_media": lambda: j.discover_media(g()),
+            "security_digest": lambda: j.security_digest(g()),
+            "open_ports": lambda: j.open_ports(g()),
+            "internet_speed": lambda: j.internet_speed(g()),
+            "name_device": lambda: j.name_device(_Match.raw(who=a["device"], label=a["name"])),
             "add_to_list": lambda: j.list_add_items(a["list"], a["items"]),
             "show_list": lambda: j.show_list(g(name=a.get("list"))),
             "check_off": lambda: j.list_check(a.get("list"), a["item"]),

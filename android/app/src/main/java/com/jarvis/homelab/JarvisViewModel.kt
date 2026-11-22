@@ -23,7 +23,7 @@ import org.json.JSONObject
 import java.util.Locale
 
 /** A question Jarvis is waiting on: yes/no, or pick one of several. */
-data class Prompt(val type: String, val question: String, val options: List<String>, val destructive: Boolean)
+data class Prompt(val type: String, val question: String, val options: List<String>, val destructive: Boolean, val code: Boolean = false)
 
 data class ChatMsg(
     val fromYou: Boolean,
@@ -310,12 +310,15 @@ class JarvisViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** Answer the question in message [index]: true/false for yes/no, an option number or null for pick-one. */
-    fun answer(index: Int, value: Any?) {
+    /** value: true/false for yes/no, an option number or null for pick-one; code: the authenticator code when two-factor is on. */
+    fun answer(index: Int, value: Any?, code: String? = null) {
         val msg = messages.getOrNull(index) ?: return
         val id = msg.jobId ?: return
         put(index, msg.copy(prompt = null, working = true))
         viewModelScope.launch {
-            val job = io { api.post("/api/chat/$id/answer", JSONObject().put("answer", value ?: JSONObject.NULL)) }
+            val body = JSONObject().put("answer", value ?: JSONObject.NULL)
+            if (code != null) body.put("code", code)
+            val job = io { api.post("/api/chat/$id/answer", body) }
             if (job == null) {
                 put(index, ChatMsg(false, "I couldn't send your answer."))
                 busy = false
@@ -365,6 +368,7 @@ class JarvisViewModel(app: Application) : AndroidViewModel(app) {
                 question = q.removePrefix("[destructive] "),
                 options = if (opts != null) List(opts.length()) { opts.getString(it) } else emptyList(),
                 destructive = q.startsWith("[destructive] "),
+                code = p.optBoolean("code"),
             )
         }
         val done = job.optString("status") == "done"
