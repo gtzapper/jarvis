@@ -387,6 +387,18 @@ Do **not** give it "Deny Config Write". Create a key as that user and put it in 
 
 Then run `check vm setup`. On pfSense 2.8 with the Kea DHCP backend, do one test VM first and check that the mapping appears under Services → DHCP Server → LAN → Static Mappings. The REST API package's Kea support is newer than its ISC support.
 
+## Jarvis on your phone (installable app)
+The dashboard works as a phone app: full screen, its own icon, a bottom tab bar, and long-press shortcuts to Chat and Lab status.
+
+1. On your phone, open Jarvis in Chrome (for example `http://10.0.20.x:8080`) and log in.
+2. Chrome menu (⋮) → **Add to Home screen** (or **Install app**).
+
+The dashboard has to listen on your network for this, so set a dashboard password and start it with host `0.0.0.0`.
+
+**HTTP vs HTTPS:** Chrome only fully installs a web app from a secure address. Over plain `http://` on your Wi-Fi you still get a home-screen icon, but it may open as a normal Chrome tab with the address bar. To get the full app, reach Jarvis over HTTPS. The easiest way is Tailscale: install it on the Jarvis host and your phone, turn on MagicDNS and HTTPS certificates in the Tailscale admin console (DNS page), then run `tailscale serve --bg 8080` on the host. That gives a private `https://<name>.<tailnet>.ts.net` address that only your devices can reach. Don't open Jarvis to the internet directly.
+
+A native Android app is planned next; it doesn't need HTTPS on your home network.
+
 ## Phone alerts (optional)
 Install the **ntfy** app, subscribe to a long random topic name, and set `NTFY_URL=https://ntfy.sh/<that-topic>` in `.env`. Anyone who knows the topic name can read it, so make it unguessable, or self-host ntfy.
 

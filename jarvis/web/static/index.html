@@ -4,6 +4,12 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Jarvis</title>
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/icon-192.png" type="image/png">
+<link rel="apple-touch-icon" href="/icon-192.png">
+<meta name="theme-color" content="#f4f5f7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0f1216" media="(prefers-color-scheme: dark)">
+<meta name="mobile-web-app-capable" content="yes">
 <style>
 :root {
   --bg: #f4f5f7; --panel: #ffffff; --panel2: #f9fafb; --text: #1b1f24; --muted: #667085; --line: #e4e7ec;
@@ -24,7 +30,10 @@ button, input, select { font: inherit; color: inherit; }
 nav { background: var(--panel); border-right: 1px solid var(--line); padding: 18px 12px; display: flex; flex-direction: column; gap: 4px; }
 .brand { font-weight: 700; font-size: 18px; padding: 4px 10px 16px; letter-spacing: .3px; }
 .brand span { color: var(--accent); }
-nav button { text-align: left; background: none; border: 0; padding: 9px 10px; border-radius: 8px; cursor: pointer; color: var(--muted); }
+nav button { text-align: left; background: none; border: 0; padding: 9px 10px; border-radius: 8px; cursor: pointer; color: var(--muted); display: flex; align-items: center; gap: 10px; font: inherit; }
+nav svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+.mobile-only { display: none; }
+[hidden] { display: none !important; }
 nav button:hover { background: var(--panel2); color: var(--text); }
 nav button.active { background: var(--panel2); color: var(--text); font-weight: 600; }
 nav .spacer { flex: 1; }
@@ -103,11 +112,24 @@ select.select, input[type=text], input[type=password], input[type=number], input
 .keybox { font-family: ui-monospace, Consolas, monospace; font-size: 12px; word-break: break-all; background: var(--panel2); padding: 10px; border-radius: 8px; margin: 8px 0; }
 .empty { color: var(--muted); padding: 30px; text-align: center; }
 @media (max-width: 760px) {
-  .app { grid-template-columns: 1fr; }
-  nav { flex-direction: row; overflow-x: auto; padding: 8px; border-right: 0; border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 2; }
-  .brand { padding: 8px 10px; } nav .spacer { display: none; }
-  main { padding: 16px; }
-  .chat { height: calc(100vh - 90px); }
+  /* phone: app-style bottom tab bar */
+  .app { grid-template-columns: 1fr; padding-bottom: calc(60px + env(safe-area-inset-bottom)); }
+  nav { position: fixed; left: 0; right: 0; bottom: 0; z-index: 5; flex-direction: row; gap: 0; padding: 4px 4px calc(4px + env(safe-area-inset-bottom));
+        border-right: 0; border-top: 1px solid var(--line); }
+  .brand, nav .spacer, #logout { display: none; }
+  nav button { flex: 1; flex-direction: column; gap: 2px; padding: 6px 2px; font-size: 11px; text-align: center; border-radius: 10px; }
+  nav button.active { background: none; color: var(--accent); }
+  nav svg { width: 22px; height: 22px; }
+  .mobile-only { display: inline-flex; }
+  main { padding: 14px 14px 8px; }
+  h1 { font-size: 20px; }
+  .chat { height: calc(100dvh - 76px - env(safe-area-inset-bottom)); }
+  .chips { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; margin-bottom: 8px; padding-bottom: 2px; }
+  .chips::-webkit-scrollbar { display: none; }
+  .chip { flex: none; }
+  .modehelp { display: none; }
+  .composer input { font-size: 16px; }
+  .msg { max-width: 92%; }
   .grid { grid-template-columns: 1fr; }
 }
 </style>
@@ -116,11 +138,11 @@ select.select, input[type=text], input[type=password], input[type=number], input
 <div class="app">
   <nav>
     <div class="brand">J<span>A</span>RVIS</div>
-    <button data-view="dashboard" class="active">Dashboard</button>
-    <button data-view="chat">Chat</button>
-    <button data-view="devices">Devices</button>
-    <button data-view="activity">Activity</button>
-    <button data-view="setup">Setup</button>
+    <button data-view="dashboard" class="active"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 13h8V3H3v10zm0 8h8v-6H3v6zm10 0h8V11h-8v10zm0-18v6h8V3h-8z"/></svg><span>Dashboard</span></button>
+    <button data-view="chat"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h16v12H7l-3 3V4z"/></svg><span>Chat</span></button>
+    <button data-view="devices"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v10H4zM2 19h20M9 15v4M15 15v4"/></svg><span>Devices</span></button>
+    <button data-view="activity"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg><span>Activity</span></button>
+    <button data-view="setup"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg><span>Setup</span></button>
     <div class="spacer"></div>
     <button id="logout" hidden>Log out</button>
   </nav>
@@ -146,7 +168,7 @@ select.select, input[type=text], input[type=password], input[type=number], input
           <span class="modehelp" id="modehelp"></span>
         </div>
         <form class="composer" id="composer">
-          <input id="input" autocomplete="off" placeholder="Ask Jarvis anything, e.g. why is Plex buffering? / grab the new Dune movie / is the NAS ok?">
+          <input id="input" autocomplete="off" placeholder="Tell Jarvis what to do..." enterkeyhint="send">
           <button class="btn primary">Send</button>
         </form>
       </div>
@@ -166,7 +188,7 @@ select.select, input[type=text], input[type=password], input[type=number], input
     </section>
 
     <section id="setup" hidden>
-      <h1>Setup</h1>
+      <div class="row" style="justify-content:space-between;align-items:center"><h1>Setup</h1><button class="btn mobile-only" id="logout2" hidden>Log out</button></div>
       <p class="sub">Add your services here. Keys and passwords are saved to <code>.env</code> on this PC and are never shown again; leave a secret field blank to keep its current value.</p>
       <div class="card" id="versioncard" style="margin-bottom:12px"></div>
       <div class="card" id="sshcard"></div>
@@ -516,11 +538,14 @@ function entryForm(svc, values, index) {
 }
 
 /* ---------- start ---------- */
-fetch("/login", { method: "HEAD", redirect: "manual" }).then(r => { if (r.type !== "opaqueredirect") $("#logout").hidden = false; }).catch(() => {});
-$("#logout").onclick = async () => { await api("/logout", {}); location.href = "/login"; };
+fetch("/login", { method: "HEAD", redirect: "manual" }).then(r => { if (r.type !== "opaqueredirect") { $("#logout").hidden = false; $("#logout2").hidden = false; } }).catch(() => {});
+$("#logout").onclick = $("#logout2").onclick = async () => { await api("/logout", {}); location.href = "/login"; };
 let start = "dashboard";
 try { start = localStorage.getItem("jarvis.view") || start; } catch {}
+const asked = new URLSearchParams(location.search).get("view");  // app shortcuts: Chat / Lab status
+if (asked && document.getElementById(asked)) start = asked;
 show(start);
+if ("serviceWorker" in navigator && window.isSecureContext) navigator.serviceWorker.register("/sw.js").catch(() => {});
 </script>
 </body>
 </html>

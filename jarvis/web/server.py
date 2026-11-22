@@ -24,6 +24,8 @@ from ..media.clients import MediaStack
 from ..monitor import Monitor, spoken_summary
 
 STATIC = Path(__file__).parent / "static"
+APP_FILES = {"/manifest.webmanifest": "application/manifest+json", "/sw.js": "text/javascript",
+             "/icon-192.png": "image/png", "/icon-512.png": "image/png"}
 SECRET_FILE = Path("data/web_secret")
 
 
@@ -125,7 +127,7 @@ def create_app(state: State, password: str | None) -> Flask:
 
     @app.before_request
     def guard():
-        if request.path in ("/login", "/favicon.ico"):
+        if request.path in ("/login", "/favicon.ico") or request.path in APP_FILES:  # the app icon and manifest hold no data
             return None
         if password and not session.get("ok"):
             return (jsonify(error="login required"), 401) if request.path.startswith("/api/") else redirect("/login")
@@ -160,6 +162,20 @@ def create_app(state: State, password: str | None) -> Flask:
     @app.get("/")
     def index():
         return send_from_directory(STATIC, "index.html")
+
+    @app.get("/favicon.ico")
+    def favicon():
+        return send_from_directory(STATIC, "icon-192.png", mimetype="image/png")
+
+    @app.get("/<path:name>")
+    def app_file(name):
+        """Installable-app files: manifest, offline service worker, icons."""
+        if "/" + name not in APP_FILES:
+            abort(404)
+        resp = send_from_directory(STATIC, name, mimetype=APP_FILES["/" + name])
+        if name == "sw.js":
+            resp.headers["Cache-Control"] = "no-cache"
+        return resp
 
     # ------------------------------------------------------------ dashboard
 
