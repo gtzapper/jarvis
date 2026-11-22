@@ -194,6 +194,7 @@ class JarvisViewModel(app: Application) : AndroidViewModel(app) {
         io { api.get("/api/planner?days=31") }?.let { planner = it }
         io { api.get("/api/mail?hours=72") }?.let { mail = it }
         io { api.get("/api/life") }?.let { life = it }
+        io { api.get("/api/docs") }?.let { docs = it }
     }
 
     var life by mutableStateOf<JSONObject?>(null)
@@ -202,6 +203,61 @@ class JarvisViewModel(app: Application) : AndroidViewModel(app) {
     fun lifeAction(path: String, body: JSONObject = JSONObject()) = viewModelScope.launch {
         io { api.post(path, body) }
         io { api.get("/api/life") }?.let { life = it }
+    }
+
+    var docs by mutableStateOf<JSONObject?>(null)
+        private set
+    var docsAnswer by mutableStateOf<String?>(null)
+        private set
+    var docsBusy by mutableStateOf<String?>(null)
+        private set
+
+    fun loadDocs() = viewModelScope.launch { io { api.get("/api/docs") }?.let { docs = it } }
+
+    fun askDocs(question: String) {
+        docsAnswer = null
+        docsBusy = "Looking through your documents with your local AI..."
+        viewModelScope.launch {
+            val r = io { api.post("/api/docs/ask", JSONObject().put("question", question)) }
+            docsBusy = null
+            docsAnswer = when {
+                r == null -> "Couldn't reach Jarvis."
+                !r.optBoolean("ok") -> r.optString("error")
+                else -> {
+                    val src = r.optJSONArray("sources")
+                    val list = (0 until (src?.length() ?: 0)).map { src!!.getJSONObject(it) }
+                        .joinToString("; ") { "[${it.optInt("n")}] ${it.optString("path")}" + if (it.optString("path").endsWith(".pdf")) ", page ${it.optInt("page")}" else "" }
+                    r.optString("answer") + if (list.isNotEmpty()) "\nSources: $list" else ""
+                }
+            }
+        }
+    }
+
+    fun uploadDoc(name: String, bytes: ByteArray, mime: String, receipt: Boolean) {
+        docsBusy = if (receipt) "Reading the receipt with your local vision model (up to a minute)..." else "Adding $name..."
+        docsAnswer = null
+        viewModelScope.launch {
+            val r = io { api.upload("/api/docs/upload", name, bytes, mime, if (receipt) mapOf("receipt" to "1") else emptyMap()) }
+            docsBusy = null
+            docsAnswer = when {
+                r == null -> "Upload failed: couldn't reach Jarvis."
+                !r.optBoolean("ok") -> r.optString("error")
+                receipt -> r.optJSONObject("receipt")?.let { x ->
+                    "Receipt read: ${x.optString("merchant")}, ${x.optString("date").takeIf { it != "null" } ?: "no date"}, " +
+                        "${x.opt("total") ?: "?"} ${x.optString("currency").takeIf { it != "null" } ?: ""}" +
+                        (x.optString("warranty_ends").takeIf { it.isNotEmpty() && it != "null" }?.let { ". Warranty until $it: tap Warranty to put it on the calendar." } ?: ".")
+                }
+                else -> "Added $name."
+            }
+            loadDocs()
+        }
+    }
+
+    fun docAction(path: String) = viewModelScope.launch {
+        val r = io { api.post(path) }
+        if (r != null && r.optBoolean("ok")) r.optString("result").takeIf { it.isNotEmpty() && it != "null" }?.let { docsAnswer = it }
+        else if (r != null) docsAnswer = r.optString("error")
+        loadDocs()
     }
 
     var mail by mutableStateOf<JSONObject?>(null)

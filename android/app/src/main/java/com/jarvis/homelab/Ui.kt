@@ -463,8 +463,8 @@ fun PlannerScreen(vm: JarvisViewModel) {
         item { PhoneCalendarRow(vm) }
         item {
             SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
-                listOf("upcoming" to "Coming up", "lists" to "Lists", "mail" to "Mail", "notes" to "Notes").forEachIndexed { i, (key, label) ->
-                    SegmentedButton(selected = section == key, onClick = { section = key }, shape = SegmentedButtonDefaults.itemShape(i, 4)) { Text(label, fontSize = 13.sp, maxLines = 1) }
+                listOf("upcoming" to "Soon", "lists" to "Lists", "mail" to "Mail", "docs" to "Docs", "notes" to "Notes").forEachIndexed { i, (key, label) ->
+                    SegmentedButton(selected = section == key, onClick = { section = key }, shape = SegmentedButtonDefaults.itemShape(i, 5)) { Text(label, fontSize = 12.sp, maxLines = 1) }
                 }
             }
         }
@@ -472,7 +472,10 @@ fun PlannerScreen(vm: JarvisViewModel) {
             item { Text("Loading...", color = c.onSurfaceVariant) }
             return@LazyColumn
         }
-        if (section == "lists") {
+        if (section == "docs") {
+            item { DocsPanel(vm) }
+            docItems(vm)
+        } else if (section == "lists") {
             listItems(vm)
         } else if (section == "mail") {
             mailItems(vm)
@@ -528,6 +531,63 @@ fun PhoneCalendarRow(vm: JarvisViewModel) {
             else if (PhoneCalendar.allowed(context)) vm.usePhoneCalendar(true)
             else ask.launch(arrayOf(Manifest.permission.READ_CALENDAR, Manifest.permission.WRITE_CALENDAR))
         })
+    }
+}
+
+@Composable
+fun DocsPanel(vm: JarvisViewModel) {
+    val context = LocalContext.current
+    var q by rememberSaveable { mutableStateOf("") }
+    val photoFile = remember { java.io.File(context.cacheDir, "captures").apply { mkdirs() }.resolve("receipt.jpg") }
+    val photoUri = remember { androidx.core.content.FileProvider.getUriForFile(context, "${context.packageName}.files", photoFile) }
+    val camera = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { ok ->
+        if (ok && photoFile.exists()) vm.uploadDoc("receipt-${System.currentTimeMillis() / 1000}.jpg", photoFile.readBytes(), "image/jpeg", receipt = true)
+    }
+    val picker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        if (uri != null) {
+            val cr = context.contentResolver
+            val name = cr.query(uri, null, null, null, null)?.use { c -> val i = c.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+                if (i >= 0 && c.moveToFirst()) c.getString(i) else null } ?: "document"
+            val bytes = cr.openInputStream(uri)?.use { it.readBytes() }
+            if (bytes != null) vm.uploadDoc(name, bytes, cr.getType(uri) ?: "application/octet-stream", receipt = false)
+        }
+    }
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text("Your documents and receipts are read only by your local AI.", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button({ camera.launch(photoUri) }) { Text("Receipt photo") }
+            OutlinedButton({ picker.launch("*/*") }) { Text("Add file") }
+        }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            OutlinedTextField(q, { q = it }, placeholder = { Text("Ask your documents...") }, singleLine = true, modifier = Modifier.weight(1f),
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                keyboardActions = KeyboardActions(onSearch = { if (q.isNotBlank()) vm.askDocs(q) }))
+            TextButton({ if (q.isNotBlank()) vm.askDocs(q) }) { Text("Ask") }
+        }
+        vm.docsBusy?.let { Row(verticalAlignment = Alignment.CenterVertically) { CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp); Spacer(Modifier.width(8.dp)); Text(it, fontSize = 13.sp) } }
+        vm.docsAnswer?.let {
+            Text(it, fontSize = 14.sp, modifier = Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.secondaryContainer, RoundedCornerShape(12.dp)).padding(12.dp),
+                color = MaterialTheme.colorScheme.onSecondaryContainer)
+        }
+    }
+}
+
+private fun androidx.compose.foundation.lazy.LazyListScope.docItems(vm: JarvisViewModel) {
+    val arr = vm.docs?.optJSONArray("documents") ?: return
+    val list = (0 until arr.length()).map { arr.getJSONObject(it) }
+    if (list.isEmpty()) item { Text("No documents yet.", fontSize = 14.sp) }
+    items(list) { d ->
+        Row(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surface, RoundedCornerShape(12.dp))
+            .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(12.dp)).padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text(d.optString("title"), fontSize = 15.sp)
+                val err = d.optString("error").takeIf { it.isNotEmpty() && it != "null" }
+                Text(err?.let { "Couldn't read: $it" } ?: (d.optString("kind") + (if (d.optInt("pages") > 1) " · ${d.optInt("pages")} pages" else "")),
+                    fontSize = 12.sp, color = if (err != null) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            if (d.optString("kind") == "receipt") TextButton({ vm.docAction("/api/docs/${d.optInt("id")}/warranty") }) { Text("Warranty") }
+        }
     }
 }
 

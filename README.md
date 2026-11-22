@@ -306,6 +306,19 @@ weather / weather tomorrow / will it rain
   - Turning it off needs a current code.
   - Keep the key safe: if you lose the phone, you'll need it, or you can set `two_factor: {enabled: false}` in config.yaml.
 
+## Ask your documents, receipts and web research
+**Documents** (Setup → Documents & receipts; upload in Planner → Documents, the app's Planner → Docs, or drop files into `config/data/documents`):
+- PDF, Word (.docx), text, Markdown and HTML are split into passages and made searchable by a **local** embedding model (`nomic-embed-text`). New files dropped into the folder are picked up every 10 minutes.
+- Ask in the Documents card, or say `ask my documents when does my car insurance renew`. Your local model answers from the passages it finds and cites them ("[1] car-insurance.pdf, page 2"). If the answer isn't there, it says so.
+- **Private.** Documents are read only by your local models, even when Claude is the AI brain: Claude only gets the local model's answer, never the documents.
+- Scanned PDFs without a text layer can't be read yet (they show "no text found").
+
+**Receipts:** take a photo (app: Planner → Docs → **Receipt photo**, or dashboard: **Receipt photo**). Your local vision model (`qwen2.5vl:7b`) reads the shop, date, total, items and any warranty period. The receipt becomes searchable ("when did I buy the headphones?"), and **Warranty** puts the end date on the calendar with a reminder a month before. Models: `ollama pull nomic-embed-text` and `ollama pull qwen2.5vl:7b` on the Ollama machine.
+
+**Web research** (Setup → Web search): start the bundled private search engine with `docker compose --profile search up -d` (SearXNG, no account, no tracking, not exposed to your network). With the AI on, ask things like "find the best 2.5GbE switch under $100". Jarvis searches, reads the top pages and sums up with links. Without the AI, `search the web for ...` lists the results.
+- Web pages are treated as untrusted text: the AI uses them as information and never follows instructions in them.
+- The page reader only fetches public internet addresses. Anything on your network (10.x, 192.168.x, the Jarvis host) is refused, even through redirects.
+
 ## Email screening
 Jarvis checks your inboxes every 15 minutes, and your **local AI** sorts each new message: important, personal, bill, newsletter, promotion, notification or spam. It also writes a one-line summary and picks out bills (payee, amount, due date).
 

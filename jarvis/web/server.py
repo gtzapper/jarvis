@@ -111,6 +111,19 @@ class State:
             extra.append(f"{shopping} thing{'s' if shopping > 1 else ''} on the shopping list.")
         return organizer.daily_report(summary, alerts, extra)
 
+    def docs_loop(self):
+        """Pick up documents dropped into data/documents every 10 minutes."""
+        from .. import docs
+        while True:
+            time.sleep(600)
+            with self.lock:
+                cfg = self.cfg
+            if cfg.get("documents") or (cfg.get("email_ai") or {}).get("ollama_url") or (cfg.get("ai") or {}).get("provider") == "ollama":
+                try:
+                    docs.index(cfg)
+                except Exception as e:
+                    print(f"documents: {e}")
+
     def mail_loop(self):
         """Check each email account on its own schedule; tell the person about important mail and bills."""
         from email.utils import parseaddr
@@ -826,6 +839,71 @@ def create_app(state: State, password: str | None) -> Flask:
         state.reload()
         return jsonify(ok=True)
 
+    # ------------------------------------------------------------ documents and receipts
+
+    @app.get("/api/docs")
+    def docs_list():
+        from .. import docs
+        return jsonify(documents=docs.documents())
+
+    @app.post("/api/docs/upload")
+    def docs_upload():
+        from .. import docs
+        from ..audit import audit
+        f = request.files.get("file")
+        if not f:
+            return jsonify(ok=False, error="No file")
+        data = f.read(50 * 1024 * 1024 + 1)
+        if len(data) > 50 * 1024 * 1024:
+            return jsonify(ok=False, error="That file is over 50 MB")
+        with state.lock:
+            cfg = state.cfg
+        try:
+            if request.form.get("receipt") == "1":
+                info = docs.add_receipt(cfg, f.filename, data)
+                audit(f"documents: receipt added ({info.get('merchant')})")
+                return jsonify(ok=True, receipt=info)
+            p = docs.save_upload(f.filename, data)
+            r = docs.index(cfg, only=p)
+        except (ValueError, docs.DocsError) as e:
+            return jsonify(ok=False, error=str(e))
+        audit(f"documents: added {p.name}")
+        return jsonify(ok=True, result=r, name=p.name)
+
+    @app.post("/api/docs/ask")
+    def docs_ask():
+        from .. import docs
+        q = (request.json or {}).get("question", "").strip()
+        if not q:
+            return jsonify(ok=False, error="Ask a question")
+        with state.lock:
+            cfg = state.cfg
+        try:
+            return jsonify(ok=True, **docs.ask(cfg, q))
+        except docs.DocsError as e:
+            return jsonify(ok=False, error=str(e))
+
+    @app.post("/api/docs/<int:doc_id>/delete")
+    def docs_delete(doc_id):
+        from .. import docs
+        return _planner_change(lambda: docs.delete(doc_id), f"document {doc_id} deleted")
+
+    @app.post("/api/docs/<int:doc_id>/warranty")
+    def docs_warranty(doc_id):
+        from .. import docs
+        return _planner_change(lambda: docs.warranty_to_calendar(doc_id, (request.json or {}).get("ends") or None),
+                               f"warranty from document {doc_id} added to the calendar")
+
+    @app.post("/api/docs/reindex")
+    def docs_reindex():
+        from .. import docs
+        with state.lock:
+            cfg = state.cfg
+        try:
+            return jsonify(ok=True, result=docs.index(cfg))
+        except docs.DocsError as e:
+            return jsonify(ok=False, error=str(e))
+
     @app.get("/api/report")
     def report():
         return jsonify(text=state.build_report())
@@ -1007,6 +1085,7 @@ def serve(host: str | None = None, port: int | None = None, monitor: bool = True
         threading.Thread(target=state.monitor_loop, daemon=True).start()
     threading.Thread(target=state.scheduler_loop, daemon=True).start()
     threading.Thread(target=state.mail_loop, daemon=True).start()
+    threading.Thread(target=state.docs_loop, daemon=True).start()
     from waitress import serve as waitress_serve
     shown = "localhost" if _is_local(host) or host == "0.0.0.0" else host
     print(f"Jarvis dashboard: http://{shown}:{port}" + ("  (also reachable from your network)" if host == "0.0.0.0" else ""))

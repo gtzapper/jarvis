@@ -59,6 +59,10 @@ else
     PGID="$(sed -n 's/^PGID=//p' .env)"; PGID="${PGID:-1000}"
     PORT="$(sed -n 's/^JARVIS_PORT=//p' .env)"; PORT="${PORT:-8765}"
 fi
+# A private secret for the optional web search container (only added once).
+if ! grep -q '^SEARXNG_SECRET=' .env 2>/dev/null; then
+    printf 'SEARXNG_SECRET=%s\n' "$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')" >> .env
+fi
 
 # Let the in-app updater pull from a private repo too.
 if [ -n "${GITHUB_TOKEN:-}" ] && ! grep -q '^JARVIS_GIT_TOKEN=' config/.env 2>/dev/null; then

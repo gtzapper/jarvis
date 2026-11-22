@@ -95,6 +95,18 @@ def _t_location(cfg, e):
     return test(cfg)
 
 
+def _t_documents(cfg, e):
+    from .docs import index, local_ai
+    url, model, emb, vision = local_ai(cfg)
+    r = index(cfg)
+    return f"Local AI at {url} (answers: {model}, search: {emb}, receipts: {vision}). Indexed: {r['added']} new, {r['changed']} changed, {r['failed']} failed"
+
+
+def _t_search(cfg, e):
+    from .search import test
+    return test(cfg)
+
+
 def _t_email(cfg, e):
     from .mail import test_account
     return test_account(cfg, e)
@@ -263,6 +275,19 @@ SERVICES: list[Service] = [
                     Field("interval_minutes", "Check every (minutes)", "int", default=15),
                     Field("notify_important", "Tell me about important mail", "bool", default=True),
                     Field("enabled", "Enabled", "bool", default=True)]),
+    Service("documents", "Documents & receipts", "AI & automation", ("documents",), test=_t_documents,
+            help="Ask questions about your own documents (PDF, Word, text, Markdown, HTML) and receipt photos. Everything is read by "
+                 "LOCAL models only, never a cloud AI. Upload in Planner > Documents, or drop files into config/data/documents. "
+                 "Blank fields use the Email screening AI / AI brain Ollama settings.",
+            fields=[Field("ollama_url", "Ollama address", help="Blank = the email or AI brain one"),
+                    Field("model", "Answer model", help="e.g. gpt-oss:20b. Blank = the email or AI brain one"),
+                    Field("embed_model", "Embedding model", default="nomic-embed-text", help="Turns text into searchable vectors. ollama pull nomic-embed-text"),
+                    Field("vision_model", "Vision model (receipts)", default="qwen2.5vl:7b", help="Reads receipt photos. ollama pull qwen2.5vl:7b")]),
+    Service("search", "Web search", "AI & automation", ("search",), test=_t_search,
+            help="Research through your own SearXNG (private search, no account). Start the one bundled with Jarvis with "
+                 "'docker compose --profile search up -d' and keep the address. Pages are read as untrusted text, and only public "
+                 "internet addresses can be read.",
+            fields=[Field("url", "SearXNG address", default="http://searxng:8080")]),
     Service("email_ai", "Email screening AI", "Email", ("email_ai",),
             help="Which LOCAL model reads your email. Blank uses the AI brain's Ollama settings. Email is never sent to a cloud AI, "
                  "even if Claude is your AI brain; with no local model, simple rules sort mail without summaries.",

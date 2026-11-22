@@ -44,6 +44,8 @@ HELP = """Things I understand:
   add habit take meds at 21:00 / done meds / habits
   weather / weather tomorrow / will it rain
   security digest / open ports / internet speed / public ip / name device 10.0.20.44 as Living room TV
+  ask my documents when does my car insurance renew / my documents
+  search the web for best 2.5GbE switch   (with the AI on, Jarvis reads the pages and sums up with sources)
   search movie dune              look something up (also: show, artist)
   add movie dune                 add it and start searching (also: show, artist)
   search missing movies          ask Radarr/Sonarr/Lidarr to hunt for missing items
@@ -172,6 +174,9 @@ class Assistant:
             (r"^(internet speed|speed test|speedtest|how fast is (the|my) internet|run a speed test)$", self.internet_speed),
             (r"^(public ip|my ip|what'?s my (public )?ip|external ip)$", self.public_ip),
             (r"^(name|label|call) device (?P<who>\S+) (as )?(?P<label>.+)$", self.name_device),
+            (r"^(ask|search|check) (my )?(documents|docs|files)( for| about)?[:,]? (?P<q>.+)$", self.ask_documents),
+            (r"^(documents|my documents|docs|my docs|receipts|my receipts)$", self.list_documents),
+            (r"^(search the web|web search|google|look up online|research)( for)?[:,]? (?P<q>.+)$", self.web_search),
             (r"^(daily report|morning report|my report|briefing|morning briefing|daily briefing|give me my (daily |morning )?(report|briefing))$", self.daily_report),
             (rf"^(search|hunt) (for )?missing (?P<kind>{KIND_WORDS})$", self.search_missing),
             (rf"^(search|find|look ?up) (for )?(the |a )?(?P<kind>{KIND_WORDS}) (?P<q>.+)$", self.search),
@@ -1066,6 +1071,40 @@ class Assistant:
         except ValueError as e:
             return str(e)
         return f"OK, {mac} is now called {m.m['label'].strip()}."
+
+    # ------------------------------------------------------------ documents and research
+
+    def ask_documents(self, m) -> str:
+        from . import docs
+        raw = getattr(m, "m", None)
+        q = raw["q"] if isinstance(raw, re.Match) else m["q"]
+        self.say("Looking through your documents (local AI)...")
+        try:
+            r = docs.ask(self.cfg, q)
+        except docs.DocsError as e:
+            return str(e)
+        src = "; ".join(f"[{s['n']}] {s['path']}" + (f", page {s['page']}" if s["page"] and str(s["path"]).endswith(".pdf") else "") for s in r["sources"])
+        return r["answer"] + (f"\nSources: {src}" if src else "")
+
+    def list_documents(self, m) -> str:
+        from . import docs
+        ds = docs.documents()
+        if not ds:
+            return "No documents yet. Upload them in Planner > Documents, or drop files into config/data/documents."
+        return f"{len(ds)} documents:\n" + "\n".join(f"  {d['title']} ({d['kind']}" + (f", {d['pages']} pages" if d["pages"] and d["pages"] > 1 else "") + ")"
+                                                   + (f" - couldn't read: {d['error']}" if d["error"] else "") for d in ds[:40])
+
+    def web_search(self, m) -> str:
+        from . import search
+        raw = getattr(m, "m", None)
+        q = raw["q"] if isinstance(raw, re.Match) else m["q"]
+        try:
+            res = search.web_search(self.cfg, q)
+        except search.SearchError as e:
+            return str(e)
+        if not res:
+            return f"No results for {q}."
+        return f"Top results for {q}:\n" + "\n".join(f"  {r['title']}\n    {r['url']}" for r in res[:6])
 
     def daily_report(self, m) -> str:
         from . import organizer as O

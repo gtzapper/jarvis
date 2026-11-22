@@ -34,5 +34,18 @@ services:
     volumes:
       - voice-models:/home/ubuntu/.cache/huggingface/hub   # a Docker volume, so file ownership just works
 
+  # Optional: private web search for research ("search the web for ...").
+  # Start it with:  docker compose --profile search up -d     (Setup > Web search keeps http://searxng:8080)
+  searxng:
+    image: searxng/searxng:latest
+    container_name: jarvis-search
+    profiles: ["search"]
+    restart: unless-stopped
+    environment:
+      SEARXNG_BASE_URL: "http://searxng:8080/"
+      SEARXNG_SECRET: "${SEARXNG_SECRET:-set-a-long-random-value-in-.env}"
+    volumes:
+      - ./docker/searxng:/etc/searxng
+
 volumes:
   voice-models:

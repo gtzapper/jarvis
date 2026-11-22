@@ -266,6 +266,7 @@ select.select, input[type=text], input[type=password], input[type=number], input
         <div>
           <div class="card" id="monthcard"></div>
           <div class="card" id="upcomingcard" style="margin-top:12px"></div>
+          <div class="card" id="docscard" style="margin-top:12px"></div>
         </div>
         <div>
           <div class="card" id="listscard" style="margin-bottom:12px"></div>
@@ -599,6 +600,10 @@ const SVC_META = {
   voice: ["Mic", "#a855f7", "Hey Jarvis: speech-to-text and voice for listening devices"],
   planner: ["Pl", "#22c55e", "How reminders, bills and the daily report reach you"],
   location: ["Wx", "#0ea5e9", "Weather and commute time for the daily report"],
+  documents: ["Doc", "#14b8a6", "Ask questions about your documents and receipts (local AI only)"],
+  search: ["Web", "#6366f1", "Private web search for research (SearXNG)"],
+  security_watch: ["Sec", "#ef4444", "SSH login alerts and the weekly security digest"],
+  network_watch: ["Net", "#06b6d4", "Public IP changes and internet speed history"],
   backup_watch: ["Bk", "#84cc16", "Recent Proxmox backups, ZFS scrubs and Unraid parity checks"],
   expiry_watch: ["Exp", "#eab308", "Warnings before certificates and domains expire"],
   updates: ["Up", "#94a3b8", "GitHub token, only needed for a private repo"],
@@ -788,7 +793,7 @@ const isoDay = d => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDa
 async function loadPlanner() {
   plan = await api("/api/planner?days=120");
   if (!planMonth) { const t = new Date(); planMonth = new Date(t.getFullYear(), t.getMonth(), 1); }
-  renderQuickAdd(); renderMonth(); renderUpcoming(); renderNotes(); renderFeed(); loadMail(); loadLife();
+  renderQuickAdd(); renderMonth(); renderUpcoming(); renderNotes(); renderFeed(); loadMail(); loadLife(); loadDocs();
 }
 async function planPost(path, body) {
   const r = await api(path, body || {});
@@ -911,6 +916,63 @@ async function loadLife() {
     d.memories.length ? el("details", { style: "margin-top:14px" }, el("summary", { class: "help", style: "cursor:pointer" }, `What Jarvis remembers about you (${d.memories.length})`),
       d.memories.map(m => el("div", { class: "item" }, el("div", { class: "grow" }, m.text),
         el("div", { class: "acts" }, el("button", { class: "btn", title: "Forget", onclick: () => act(`/api/life/memory/${m.id}/delete`) }, "Forget"))))) : null);
+}
+async function uploadDoc(file, receipt) {
+  const fd = new FormData();
+  fd.append("file", file);
+  if (receipt) fd.append("receipt", "1");
+  const r = await fetch("/api/docs/upload", { method: "POST", body: fd, headers: { "X-Jarvis": "1" } });
+  if (r.status === 401) { location.href = "/login"; return { ok: false }; }
+  return r.json();
+}
+async function loadDocs(note) {
+  const card = $("#docscard");
+  const d = await api("/api/docs");
+  const status = el("div", { class: "fhelp" }, note || "");
+  const pick = (receipt) => {
+    const inp = el("input", { type: "file", accept: receipt ? "image/*" : ".pdf,.docx,.txt,.md,.html,.htm,.csv,image/*", multiple: !receipt, style: "display:none" });
+    if (receipt) inp.setAttribute("capture", "environment");
+    inp.onchange = async () => {
+      for (const f of inp.files) {
+        status.className = "fhelp"; status.textContent = receipt ? `Reading ${f.name} with your local vision model (up to a minute)...` : `Adding ${f.name}...`;
+        const r = await uploadDoc(f, receipt);
+        if (!r.ok) { status.className = "fhelp result bad"; status.textContent = `${f.name}: ${r.error}`; return; }
+        if (receipt) {
+          const x = r.receipt;
+          return loadDocs(`Receipt read: ${x.merchant}, ${x.date || "no date"}, ${x.total ?? "?"} ${x.currency || ""}` + (x.warranty_ends ? `. Warranty until ${x.warranty_ends}: use "Warranty" below to put it on the calendar.` : "."));
+        }
+      }
+      loadDocs(`Added ${inp.files.length} file(s).`);
+    };
+    document.body.append(inp); inp.click(); setTimeout(() => inp.remove(), 60000);
+  };
+  const q = el("input", { type: "text", placeholder: "Ask your documents, e.g. when does my car insurance renew?", style: "flex:1" });
+  const answer = el("div");
+  const ask = async () => {
+    if (!q.value.trim()) return;
+    put(answer, el("p", { class: "help" }, "Looking through your documents with your local AI..."));
+    const r = await api("/api/docs/ask", { question: q.value });
+    if (!r.ok) { put(answer, el("p", { class: "result bad" }, r.error)); return; }
+    put(answer, el("div", { class: "howto", style: "margin-top:10px;white-space:pre-wrap" }, r.answer,
+      r.sources.length ? el("div", { class: "help", style: "margin-top:6px" }, "Sources: " + r.sources.map(s => `[${s.n}] ${s.path}${s.path.endsWith(".pdf") ? `, page ${s.page}` : ""}`).join("; ")) : null));
+  };
+  q.onkeydown = e => { if (e.key === "Enter") ask(); };
+  const act = async (path, body) => { const r = await api(path, body || {}); if (!r.ok) alert(r.error); loadDocs(r.ok && r.result && typeof r.result === "string" ? r.result : ""); };
+  put(card, el("div", { class: "row", style: "justify-content:space-between" }, el("strong", {}, `Documents (${d.documents.length})`),
+      el("div", { class: "row" }, el("button", { class: "btn", onclick: () => pick(false) }, "Add documents"), el("button", { class: "btn", onclick: () => pick(true) }, "Receipt photo"))),
+    el("p", { class: "help", style: "margin:4px 0 8px" }, "PDF, Word, text and receipt photos. Read only by your local AI; nothing goes to a cloud service."),
+    status,
+    el("div", { class: "row", style: "margin-top:6px" }, q, el("button", { class: "btn primary", onclick: ask }, "Ask")), answer,
+    d.documents.length ? el("div", { style: "margin-top:10px" }, d.documents.slice(0, 50).map(x => el("div", { class: "item" },
+      el("span", { class: "dot " + (x.kind === "receipt" ? "k-bill" : "k-event") }),
+      el("div", { class: "grow" }, el("div", {}, x.title), el("div", { class: "when" }, x.error ? "Couldn't read: " + x.error : `${x.kind}${x.pages > 1 ? ` · ${x.pages} pages` : ""} · added ${x.added.replace("T", " ")}`
+        + (x.meta && x.meta.total ? ` · ${x.meta.total} ${x.meta.currency || ""}` : ""))),
+      el("div", { class: "acts" },
+        x.kind === "receipt" ? el("button", { class: "btn", title: "Put the warranty end on the calendar", onclick: () => {
+          const ends = x.meta && x.meta.warranty_months ? null : prompt("When does the warranty end? (YYYY-MM-DD)"); if (ends === "") return;
+          act(`/api/docs/${x.id}/warranty`, ends ? { ends } : {}); } }, "Warranty") : null,
+        el("button", { class: "btn", title: "Delete", onclick: () => confirm(`Delete ${x.path}? The file is removed too.`) && act(`/api/docs/${x.id}/delete`) }, "×"))))) :
+      el("p", { class: "help" }, "No documents yet."));
 }
 async function loadMail() {
   const card = $("#mailcard");

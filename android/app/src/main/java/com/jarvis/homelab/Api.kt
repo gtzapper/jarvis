@@ -64,7 +64,7 @@ class AuthNeeded : IOException("Jarvis wants you to log in again.")
 class Api(private val prefs: Prefs) {
 
     private fun call(path: String, method: String = "GET", body: String? = null,
-                     type: String = "application/json", timeoutMs: Int = 30_000): Pair<Int, String> {
+                     type: String = "application/json", timeoutMs: Int = 30_000, raw: ByteArray? = null): Pair<Int, String> {
         val c = URL(prefs.server.trimEnd('/') + path).openConnection() as HttpURLConnection
         try {
             c.instanceFollowRedirects = false
@@ -74,10 +74,10 @@ class Api(private val prefs: Prefs) {
             c.setRequestProperty("Accept", "application/json")
             c.setRequestProperty("X-Jarvis", "1") // Jarvis's protection against cross-site requests
             prefs.cookie?.let { c.setRequestProperty("Cookie", it) }
-            if (body != null) {
+            if (body != null || raw != null) {
                 c.doOutput = true
                 c.setRequestProperty("Content-Type", type)
-                c.outputStream.use { it.write(body.toByteArray()) }
+                c.outputStream.use { it.write(raw ?: body!!.toByteArray()) }
             }
             val code = c.responseCode
             c.headerFields.entries.firstOrNull { it.key.equals("Set-Cookie", true) }?.value
@@ -117,6 +117,18 @@ class Api(private val prefs: Prefs) {
              "application/x-www-form-urlencoded")
         if (prefs.cookie == null) return "Wrong password."
         return if (call("/api/mode").first == 200) null else "Logged in, but Jarvis still said no. Try again."
+    }
+
+    /** Upload a file (multipart form), e.g. a document or a receipt photo. */
+    fun upload(path: String, filename: String, data: ByteArray, mime: String, fields: Map<String, String> = emptyMap()): JSONObject {
+        val boundary = "----jarvis" + System.nanoTime()
+        val out = java.io.ByteArrayOutputStream()
+        for ((k, v) in fields) out.write("--$boundary\r\nContent-Disposition: form-data; name=\"$k\"\r\n\r\n$v\r\n".toByteArray())
+        out.write("--$boundary\r\nContent-Disposition: form-data; name=\"file\"; filename=\"${filename.replace("\"", "")}\"\r\nContent-Type: $mime\r\n\r\n".toByteArray())
+        out.write(data)
+        out.write("\r\n--$boundary--\r\n".toByteArray())
+        val (c, t) = call(path, "POST", null, "multipart/form-data; boundary=$boundary", 300_000, out.toByteArray())
+        return check(c, t)
     }
 
     fun logout() {
