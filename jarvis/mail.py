@@ -58,8 +58,9 @@ def _db():
     return organizer.db()
 
 
-def _ensure(c):
-    c.executescript(SCHEMA)
+def _ensure_schema(c):
+    from . import organizer
+    organizer.ensure(c, SCHEMA)
 
 
 # ---------------------------------------------------------------- signing in
@@ -190,7 +191,7 @@ def fetch_new(entry: dict, first_run_days: int = 2) -> tuple[list[dict], int, in
     name = entry["name"]
     folder = entry.get("folder") or "INBOX"
     with _db() as c:
-        _ensure(c)
+        _ensure_schema(c)
         st = c.execute("SELECT * FROM mail_state WHERE account = ?", (name,)).fetchone()
     m = connect(entry)
     try:
@@ -336,7 +337,7 @@ def check_account(cfg: dict, entry: dict) -> list[dict]:
         msgs, uidvalidity, highest = fetch_new(entry, int(entry.get("first_run_days") or 2))
     except MailError as e:
         with _db() as c:
-            _ensure(c)
+            _ensure_schema(c)
             c.execute("INSERT INTO mail_state (account, checked, error) VALUES (?, ?, ?) ON CONFLICT(account) DO UPDATE SET checked=excluded.checked, error=excluded.error",
                       (name, datetime.now().strftime("%Y-%m-%dT%H:%M"), str(e)))
         raise
@@ -356,7 +357,7 @@ def check_account(cfg: dict, entry: dict) -> list[dict]:
                "received": msg["received"], "category": result["category"], "important": int(result["important"] or result["category"] == "important"),
                "summary": result["summary"], "bill": json.dumps(result["bill"]) if result.get("bill") else None, "screened_by": by}
         with _db() as c:
-            _ensure(c)
+            _ensure_schema(c)
             cur = c.execute("INSERT OR IGNORE INTO mail (account, folder, uidvalidity, uid, sender, subject, received, category, important, summary, bill, screened_by, created) "
                             "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)", (name, row["folder"], uidvalidity, row["uid"], row["sender"], row["subject"], row["received"],
                                                                     row["category"], row["important"], row["summary"], row["bill"], by, datetime.now().strftime("%Y-%m-%dT%H:%M")))
@@ -364,7 +365,7 @@ def check_account(cfg: dict, entry: dict) -> list[dict]:
                 row["id"] = cur.lastrowid
                 screened.append(row)
     with _db() as c:
-        _ensure(c)
+        _ensure_schema(c)
         c.execute("INSERT INTO mail_state (account, uidvalidity, last_uid, checked, error) VALUES (?, ?, ?, ?, NULL) "
                   "ON CONFLICT(account) DO UPDATE SET uidvalidity=excluded.uidvalidity, last_uid=excluded.last_uid, checked=excluded.checked, error=NULL",
                   (name, uidvalidity, highest, datetime.now().strftime("%Y-%m-%dT%H:%M")))
@@ -395,7 +396,7 @@ def test_account(cfg: dict, entry: dict) -> str:
 def recent(hours: int = 24, category: str | None = None, limit: int = 200) -> list[dict]:
     since = (datetime.now() - timedelta(hours=hours)).strftime("%Y-%m-%dT%H:%M")
     with _db() as c:
-        _ensure(c)
+        _ensure_schema(c)
         q = "SELECT * FROM mail WHERE received >= ?" + (" AND category = ?" if category else "") + " ORDER BY received DESC LIMIT ?"
         rows = c.execute(q, (since, category, limit) if category else (since, limit)).fetchall()
     out = []
@@ -408,7 +409,7 @@ def recent(hours: int = 24, category: str | None = None, limit: int = 200) -> li
 
 def states() -> list[dict]:
     with _db() as c:
-        _ensure(c)
+        _ensure_schema(c)
         return [dict(r) for r in c.execute("SELECT * FROM mail_state")]
 
 
@@ -416,7 +417,7 @@ def bill_to_calendar(mail_id: int, title: str | None = None, amount: float | Non
     """Add a bill found in an email to the calendar (only when the person asks)."""
     from . import organizer
     with _db() as c:
-        _ensure(c)
+        _ensure_schema(c)
         r = c.execute("SELECT * FROM mail WHERE id = ?", (mail_id,)).fetchone()
     if not r or not r["bill"]:
         raise ValueError("That email has no bill in it")
@@ -432,7 +433,7 @@ def bill_to_calendar(mail_id: int, title: str | None = None, amount: float | Non
 
 def dismiss_bill(mail_id: int) -> None:
     with _db() as c:
-        _ensure(c)
+        _ensure_schema(c)
         c.execute("UPDATE mail SET bill_state = 'dismissed' WHERE id = ?", (mail_id,))
 
 

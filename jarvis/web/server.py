@@ -186,6 +186,11 @@ class State:
                     organizer.record("report", "Security digest", text)
                     if p["ntfy"]:
                         notifier.send("Security digest", text)
+                with self.lock:
+                    keep = int((self.cfg.get("location_tracking") or {}).get("keep_days") or 365)
+                if organizer.report_due("03:00", key="locprune"):
+                    from .. import location
+                    location.prune(keep)
                 if organizer.report_due(p["report_time"]):
                     text = self.build_report()
                     organizer.record("report", "Daily report", text)
@@ -256,6 +261,23 @@ def create_app(state: State, password: str | None) -> Flask:
             return None
         if request.path.startswith("/calendar/"):
             return None  # the private calendar feed checks its own secret link
+        if request.path == "/api/location/owntracks":
+            # OwnTracks signs in with its own tracker code (HTTP Basic password, or a Bearer header), never the dashboard password
+            import base64 as b64
+            from ..location import tracker_for
+            auth = request.headers.get("Authorization", "")
+            token = None
+            if auth.lower().startswith("basic "):
+                try:
+                    token = b64.b64decode(auth[6:]).decode().split(":", 1)[1]
+                except Exception:
+                    token = None
+            elif auth.lower().startswith("bearer "):
+                token = auth[7:].strip()
+            g.tracker = tracker_for(token)
+            if not g.tracker:
+                return jsonify(error="unknown or removed tracker code"), 401
+            return None
         if request.path.startswith("/api/voice/device/"):
             # listening devices sign in with their own access code (Setup > Listening devices), never the dashboard password
             from ..voice import device_for
@@ -903,6 +925,107 @@ def create_app(state: State, password: str | None) -> Flask:
             return jsonify(ok=True, result=docs.index(cfg))
         except docs.DocsError as e:
             return jsonify(ok=False, error=str(e))
+
+    # ------------------------------------------------------------ location
+
+    def _location_fired(fired):
+        if fired and state.planner_cfg()["ntfy"]:
+            from ..monitor import Notifier
+            with state.lock:
+                n = Notifier(state.cfg)
+            for _, title, text in fired:
+                n.send(title, text)
+
+    @app.post("/api/location/owntracks")
+    def owntracks_in():
+        """OwnTracks HTTP mode: one message or a list. Answers with an empty list, as OwnTracks expects."""
+        from .. import location
+        body = request.get_json(silent=True)
+        msgs = body if isinstance(body, list) else [body] if isinstance(body, dict) else []
+        for m in msgs:
+            if m.get("_type") != "location" or "lat" not in m or "lon" not in m:
+                continue
+            try:
+                fired = location.add_point(g.tracker["name"], float(m["lat"]), float(m["lon"]), m.get("tst"), m.get("acc"), m.get("batt"),
+                                           m.get("vel"))
+                _location_fired(fired)
+            except (ValueError, TypeError):
+                continue
+        return jsonify([])
+
+    @app.post("/api/location/app")
+    def location_from_app():
+        """The Jarvis Android app's own location sharing (signed in like the dashboard)."""
+        from .. import location
+        b = request.json or {}
+        try:
+            fired = location.add_point(f"Jarvis app ({str(b.get('device') or 'phone')[:30]})", float(b["lat"]), float(b["lon"]),
+                                       b.get("t"), b.get("acc"), b.get("batt"), b.get("speed"))
+        except (KeyError, ValueError, TypeError) as e:
+            return jsonify(ok=False, error=f"bad location: {e}"), 400
+        _location_fired(fired)
+        return jsonify(ok=True)
+
+    @app.get("/api/location/day")
+    def location_day():
+        from datetime import date as d_
+        from .. import location
+        day = d_.fromisoformat(request.args.get("date") or d_.today().isoformat())
+        summary = location.day_summary(day)
+        summary["stays"] = [{**s, "from": time.strftime("%H:%M", time.localtime(s["start"])), "to": time.strftime("%H:%M", time.localtime(s["end"]))}
+                            for s in summary["stays"]]
+        return jsonify(day=summary, text=location.describe_day(day), places=location.places(), latest=location.latest(),
+                       trackers=location.trackers(), suggestions=location.suggest_places(), reminders=location.location_reminders(),
+                       week=location.week_summary())
+
+    @app.post("/api/location/places")
+    def location_place_add():
+        from .. import location
+        b = request.json or {}
+        return _planner_change(lambda: location.add_place(b.get("name", ""), float(b["lat"]), float(b["lon"]), b.get("kind", "other"),
+                                                          float(b.get("radius") or 150)), f"place added: {b.get('name')}")
+
+    @app.post("/api/location/places/<int:place_id>")
+    def location_place_update(place_id):
+        from .. import location
+        b = request.json or {}
+        if b.get("delete"):
+            return _planner_change(lambda: location.delete_place(place_id), f"place {place_id} deleted")
+        return _planner_change(lambda: location.update_place(place_id, b.get("name"), b.get("kind"),
+                                                             float(b["radius"]) if b.get("radius") else None), f"place {place_id} updated")
+
+    @app.post("/api/location/trackers")
+    def location_tracker_add():
+        import base64
+        import io
+        import segno
+        from .. import location
+        from ..audit import audit
+        b = request.json or {}
+        try:
+            t = location.add_tracker(b.get("name", ""))
+        except ValueError as e:
+            return jsonify(ok=False, error=str(e))
+        base = request.host_url.rstrip("/")
+        link = location.owntracks_config(base, {"name": t["name"]}, t["token"])
+        buf = io.BytesIO()
+        segno.make(link, error="l").save(buf, kind="svg", scale=4, border=2, dark="#000000", light="#ffffff")
+        audit(f"location: tracker added: {t['name']}")
+        return jsonify(ok=True, name=t["name"], token=t["token"], url=base + "/api/location/owntracks", link=link,
+                       qr="data:image/svg+xml;base64," + base64.b64encode(buf.getvalue()).decode())
+
+    @app.post("/api/location/trackers/<tracker_id>/delete")
+    def location_tracker_delete(tracker_id):
+        from .. import location
+        keep = not (request.json or {}).get("delete_history")
+        return _planner_change(lambda: location.remove_tracker(tracker_id, delete_history=not keep), f"location tracker {tracker_id} removed")
+
+    @app.post("/api/location/history/delete")
+    def location_history_delete():
+        from .. import location
+        days = (request.json or {}).get("days")
+        return _planner_change(lambda: location.delete_history(int(days) if days else None),
+                               "location history deleted" + (f" (last {days} days)" if days else " (all)"))
 
     @app.get("/api/report")
     def report():

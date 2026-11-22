@@ -26,6 +26,9 @@ class Prefs(context: Context) {
     var knownProblems: Set<String>?
         get() = sp.getStringSet("known_problems", null)
         set(v) = sp.edit().putStringSet("known_problems", v).apply()
+    var shareLocation: Boolean
+        get() = sp.getBoolean("share_location", false)
+        set(v) = sp.edit().putBoolean("share_location", v).apply()
     var phoneCalendar: Boolean
         get() = sp.getBoolean("phone_calendar", false)
         set(v) = sp.edit().putBoolean("phone_calendar", v).apply()

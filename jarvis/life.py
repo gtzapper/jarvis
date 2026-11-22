@@ -19,6 +19,11 @@ ALIASES = {"shopping": "shopping", "shopping list": "shopping", "grocery": "shop
            "todo": "todo", "to-do": "todo", "to do": "todo", "todo list": "todo", "to-do list": "todo", "to do list": "todo", "tasks": "todo"}
 
 
+def _ensure_schema(c):
+    from . import organizer
+    organizer.ensure(c, SCHEMA)
+
+
 def _db():
     c = organizer.db()
     return c
@@ -39,7 +44,7 @@ def add_items(lst: str, items: list[str]) -> list[str]:
     lst = list_name(lst)
     added = []
     with _db() as c:
-        c.executescript(SCHEMA)
+        _ensure_schema(c)
         have = {r[0].lower() for r in c.execute("SELECT text FROM list_items WHERE list = ? AND done = 0", (lst,))}
         for it in items:
             it = it.strip(" .,;")
@@ -58,7 +63,7 @@ def split_items(text: str) -> list[str]:
 
 def items(lst: str | None = None, include_done: bool = False) -> list[dict]:
     with _db() as c:
-        c.executescript(SCHEMA)
+        _ensure_schema(c)
         q = "SELECT * FROM list_items" + (" WHERE list = ?" if lst else "") + ("" if include_done else (" AND" if lst else " WHERE") + " done = 0") + \
             " ORDER BY done, id"
         return [dict(r) for r in c.execute(q, (list_name(lst),) if lst else ())]
@@ -66,7 +71,7 @@ def items(lst: str | None = None, include_done: bool = False) -> list[dict]:
 
 def lists() -> dict[str, int]:
     with _db() as c:
-        c.executescript(SCHEMA)
+        _ensure_schema(c)
         return {r[0]: r[1] for r in c.execute("SELECT list, COUNT(*) FROM list_items WHERE done = 0 GROUP BY list ORDER BY list")}
 
 
@@ -88,7 +93,7 @@ def check(lst: str | None, what: str) -> str | None:
 
 def uncheck(item_id: int) -> bool:
     with _db() as c:
-        c.executescript(SCHEMA)
+        _ensure_schema(c)
         return c.execute("UPDATE list_items SET done = 0, done_at = NULL WHERE id = ?", (item_id,)).rowcount > 0
 
 
@@ -103,7 +108,7 @@ def remove(lst: str | None, what: str) -> str | None:
 
 def clear_done(lst: str | None = None) -> int:
     with _db() as c:
-        c.executescript(SCHEMA)
+        _ensure_schema(c)
         if lst:
             return c.execute("DELETE FROM list_items WHERE done = 1 AND list = ?", (list_name(lst),)).rowcount
         return c.execute("DELETE FROM list_items WHERE done = 1").rowcount
@@ -116,7 +121,7 @@ def remember(text: str) -> int:
     if not text:
         raise ValueError("Nothing to remember")
     with _db() as c:
-        c.executescript(SCHEMA)
+        _ensure_schema(c)
         dup = c.execute("SELECT id FROM memories WHERE lower(text) = lower(?)", (text,)).fetchone()
         if dup:
             return dup[0]
@@ -125,7 +130,7 @@ def remember(text: str) -> int:
 
 def memories(query: str = "") -> list[dict]:
     with _db() as c:
-        c.executescript(SCHEMA)
+        _ensure_schema(c)
         rows = [dict(r) for r in c.execute("SELECT * FROM memories ORDER BY id")]
     if not query:
         return rows
@@ -163,13 +168,13 @@ def add_habit(name: str, time: str, days: str = "daily") -> int:
     if days not in DAYSETS:
         raise ValueError("days must be daily, weekdays or weekends")
     with _db() as c:
-        c.executescript(SCHEMA)
+        _ensure_schema(c)
         return c.execute("INSERT INTO habits (name, time, days, created) VALUES (?, ?, ?, ?)", (name.strip(), time, days, _now())).lastrowid
 
 
 def habits() -> list[dict]:
     with _db() as c:
-        c.executescript(SCHEMA)
+        _ensure_schema(c)
         hs = [dict(r) for r in c.execute("SELECT * FROM habits WHERE active = 1 ORDER BY time")]
         today = date.today()
         for h in hs:
@@ -219,7 +224,7 @@ def habit_checkins(at: datetime | None = None) -> list[tuple[str, str, str]]:
     at = at or organizer.now()
     out = []
     with _db() as c:
-        c.executescript(SCHEMA)
+        _ensure_schema(c)
     for h in habits():
         if not h["due_today"] or h["done_today"]:
             continue

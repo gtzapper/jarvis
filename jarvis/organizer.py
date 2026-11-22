@@ -34,11 +34,28 @@ def db():
         con = sqlite3.connect(DB)
         con.row_factory = sqlite3.Row
         try:
-            con.executescript(SCHEMA)
+            key = str(DB.resolve())
+            if key not in _ready:  # create the tables once per run (and again if the file was replaced)
+                con.executescript(SCHEMA)
+                _ready.add(key)
             yield con
             con.commit()
         finally:
             con.close()
+
+
+_ready: set[str] = set()
+
+
+def ensure(con, schema: str) -> None:
+    """For other modules' tables: run their CREATE statements once per run instead of on every query."""
+    key = (str(DB.resolve()), hash(schema))
+    if key not in _ready_extra:
+        con.executescript(schema)
+        _ready_extra.add(key)
+
+
+_ready_extra: set = set()
 
 
 def now() -> datetime:
@@ -142,6 +159,9 @@ def parse_when(text: str, base: datetime | None = None) -> tuple[datetime | None
         elif re.search(r"\btonight\b", t, re.I):
             day = base.date()
             t = re.sub(r"\btonight\b", " at 8pm ", t, flags=re.I)
+        elif re.search(r"\byesterday\b", t, re.I):
+            day = base.date() - timedelta(days=1)
+            t = re.sub(r"\byesterday\b", " ", t, flags=re.I)
         elif re.search(r"\btoday\b", t, re.I):
             day = base.date()
             t = re.sub(r"\btoday\b", " ", t, flags=re.I)

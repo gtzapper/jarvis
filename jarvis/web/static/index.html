@@ -220,6 +220,7 @@ select.select, input[type=text], input[type=password], input[type=number], input
     <button data-view="dashboard" class="active"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 13h8V3H3v10zm0 8h8v-6H3v6zm10 0h8V11h-8v10zm0-18v6h8V3h-8z"/></svg><span>Dashboard</span></button>
     <button data-view="chat"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h16v12H7l-3 3V4z"/></svg><span>Chat</span></button>
     <button data-view="planner"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16v14H4zM4 10h16M8 3v5M16 3v5"/></svg><span>Planner</span></button>
+    <button data-view="places"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21s-7-6.2-7-11a7 7 0 0 1 14 0c0 4.8-7 11-7 11z"/><circle cx="12" cy="10" r="2.5"/></svg><span>Places</span></button>
     <button data-view="devices"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v10H4zM2 19h20M9 15v4M15 15v4"/></svg><span>Devices</span></button>
     <button data-view="activity"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg><span>Activity</span></button>
     <button data-view="setup"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg><span>Setup</span></button>
@@ -274,6 +275,24 @@ select.select, input[type=text], input[type=password], input[type=number], input
           <div class="card" id="notescard"></div>
           <div class="card" id="feedcard" style="margin-top:12px"></div>
         </div>
+      </div>
+    </section>
+
+    <section id="places" hidden>
+      <h1>Places</h1>
+      <p class="sub">Your location history, kept only on this server. Where you went, how far, and how long at your places.</p>
+      <div class="card">
+        <div class="row" style="justify-content:space-between">
+          <div class="row"><button class="btn" id="dayprev">‹</button><input type="date" id="dayinput" style="width:auto"><button class="btn" id="daynext">›</button><button class="btn" id="daytoday">Today</button></div>
+          <span class="help" id="daylatest"></span>
+        </div>
+        <p id="daytext" style="margin:10px 0 0"></p>
+        <div id="map" style="height:380px;border-radius:10px;margin-top:10px;border:1px solid var(--line);background:var(--panel2)"></div>
+        <p class="help" style="margin:6px 0 0">Map tiles: © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors (your browser downloads the map pictures from OpenStreetMap; your history stays here).</p>
+      </div>
+      <div class="planner-grid">
+        <div><div class="card" id="stayscard"></div></div>
+        <div><div class="card" id="placescard"></div><div class="card" id="trackerscard" style="margin-top:12px"></div></div>
       </div>
     </section>
 
@@ -345,7 +364,7 @@ function show(view) {
   current = view;
   document.querySelectorAll("nav button[data-view]").forEach(b => b.classList.toggle("active", b.dataset.view === view));
   document.querySelectorAll("main > section").forEach(s => s.hidden = s.id !== view);
-  ({ dashboard: loadStatus, devices: loadDevices, planner: loadPlanner, activity: loadActivity, setup: loadSetup, chat: () => { $("#input").focus(); loadPending(); } })[view]();
+  ({ dashboard: loadStatus, devices: loadDevices, planner: loadPlanner, places: loadPlaces, activity: loadActivity, setup: loadSetup, chat: () => { $("#input").focus(); loadPending(); } })[view]();
   try { localStorage.setItem("jarvis.view", view); } catch {}
 }
 document.querySelectorAll("nav button[data-view]").forEach(b => b.onclick = () => show(b.dataset.view));
@@ -600,6 +619,7 @@ const SVC_META = {
   voice: ["Mic", "#a855f7", "Hey Jarvis: speech-to-text and voice for listening devices"],
   planner: ["Pl", "#22c55e", "How reminders, bills and the daily report reach you"],
   location: ["Wx", "#0ea5e9", "Weather and commute time for the daily report"],
+  location_tracking: ["Loc", "#f97316", "Your location history: OwnTracks or the Jarvis app"],
   documents: ["Doc", "#14b8a6", "Ask questions about your documents and receipts (local AI only)"],
   search: ["Web", "#6366f1", "Private web search for research (SearXNG)"],
   security_watch: ["Sec", "#ef4444", "SSH login alerts and the weekly security digest"],
@@ -974,6 +994,117 @@ async function loadDocs(note) {
         el("button", { class: "btn", title: "Delete", onclick: () => confirm(`Delete ${x.path}? The file is removed too.`) && act(`/api/docs/${x.id}/delete`) }, "×"))))) :
       el("p", { class: "help" }, "No documents yet."));
 }
+/* ---------- places ---------- */
+let placesDay = null, leafletMap = null, mapLayers = null, trackerSetup = null;
+function loadLeaflet() {
+  if (window.L) return Promise.resolve();
+  return new Promise((ok, bad) => {
+    const css = el("link", { rel: "stylesheet", href: "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" });
+    const js = el("script", { src: "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js" });
+    js.onload = ok; js.onerror = bad;
+    document.head.append(css, js);
+  });
+}
+async function loadPlaces() {
+  if (!placesDay) placesDay = isoDay(new Date());
+  $("#dayinput").value = placesDay;
+  const d = await api("/api/location/day?date=" + placesDay);
+  const L0 = d.latest;
+  $("#daylatest").textContent = L0 ? `Last point ${new Date(L0.t * 1000).toLocaleString()} from ${L0.tracker}` : "No location data yet: add a phone below.";
+  $("#daytext").textContent = d.text + (placesDay === isoDay(new Date()) ? "  " + d.week : "");
+  drawMap(d);
+  renderStays(d); renderPlacesList(d); renderTrackers(d);
+}
+async function drawMap(d) {
+  try { await loadLeaflet(); } catch { $("#map").textContent = "Couldn't load the map (no internet?). The stats below still work."; return; }
+  if (!leafletMap) {
+    leafletMap = L.map("map", { attributionControl: true });
+    L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 19, attribution: "© OpenStreetMap" }).addTo(leafletMap);
+    mapLayers = L.layerGroup().addTo(leafletMap);
+  }
+  mapLayers.clearLayers();
+  const accent = getComputedStyle(document.documentElement).getPropertyValue("--accent").trim() || "#3b82f6";
+  const pts = d.day.track;
+  d.places.forEach(p => L.circle([p.lat, p.lon], { radius: p.radius, color: p.kind === "home" ? "#22c55e" : p.kind === "work" ? "#f59e0b" : "#a855f7", weight: 1, fillOpacity: .12 })
+    .bindTooltip(p.name).addTo(mapLayers));
+  if (pts.length > 1) L.polyline(pts, { color: accent, weight: 4, opacity: .85 }).addTo(mapLayers);
+  d.day.stays.forEach(s => L.circleMarker([s.lat, s.lon], { radius: 7, color: "#fff", weight: 2, fillColor: s.place ? accent : "#ef4444", fillOpacity: 1 })
+    .bindPopup(`${s.place || "Unnamed place"}<br>${s.from}–${s.to}`).addTo(mapLayers));
+  const bounds = pts.length ? L.latLngBounds(pts) : d.places.length ? L.latLngBounds(d.places.map(p => [p.lat, p.lon])) : null;
+  const fit = () => { leafletMap.invalidateSize(); if (bounds) leafletMap.fitBounds(bounds.pad(0.15)); else leafletMap.setView([20, 0], 2); };
+  fit();
+  setTimeout(fit, 150);  // once the page has laid the map out at its real size
+}
+function renderStays(d) {
+  const nameIt = s => {
+    const n = prompt("Name this place (e.g. Gym, Mum's house). Type Home or Work to set those.");
+    if (!n) return;
+    const kind = /^(home|work)$/i.test(n.trim()) ? n.trim().toLowerCase() : "other";
+    api("/api/location/places", { name: n.trim(), lat: s.lat, lon: s.lon, kind }).then(loadPlaces);
+  };
+  put($("#stayscard"), el("strong", {}, "Stops"),
+    d.day.stays.length ? d.day.stays.map(s => el("div", { class: "item" }, el("span", { class: "dot " + (s.place ? "k-event" : "k-overdue") }),
+      el("div", { class: "grow" }, el("div", {}, s.place || "Unnamed place"), el("div", { class: "when" }, `${s.from}–${s.to} · ${((s.end - s.start) / 3600).toFixed(1)} h`)),
+      el("div", { class: "acts" }, s.place ? null : el("button", { class: "btn", onclick: () => nameIt(s) }, "Name it"))))
+      : el("p", { class: "help" }, d.day.points ? "No stops longer than 8 minutes." : "No location data for this day."),
+    d.reminders.length ? [el("div", { class: "day-head" }, "Location reminders"), d.reminders.map(r => el("div", { class: "item" },
+      el("div", { class: "grow" }, r.text), el("span", { class: "when" }, `${r.event === "arrive" ? "arriving at" : "leaving"} ${r.place_name}`)))] : null);
+}
+function renderPlacesList(d) {
+  const add = (kind, s) => api("/api/location/places", { name: kind === "home" ? "Home" : "Work", lat: s.lat, lon: s.lon, kind }).then(loadPlaces);
+  put($("#placescard"), el("strong", {}, `Your places (${d.places.length})`),
+    d.suggestions.map(s => el("div", { class: "howto", style: "margin-top:8px" }, `This looks like your ${s.kind} (seen ${s.samples} times). `,
+      el("button", { class: "btn primary", onclick: () => add(s.kind, s) }, `Set as ${s.kind}`))),
+    d.places.map(p => el("div", { class: "item" }, el("span", { class: "dot", style: `background:${p.kind === "home" ? "#22c55e" : p.kind === "work" ? "#f59e0b" : "#a855f7"}` }),
+      el("div", { class: "grow" }, el("div", {}, p.name), el("div", { class: "when" }, `${p.kind} · within ${Math.round(p.radius)} m`)),
+      el("div", { class: "acts" },
+        el("button", { class: "btn", onclick: () => { const n = prompt("New name", p.name); if (n) api(`/api/location/places/${p.id}`, { name: n }).then(loadPlaces); } }, "Rename"),
+        el("button", { class: "btn", title: "Size of the place", onclick: () => { const r = prompt("Radius in metres (how close counts as being there)", Math.round(p.radius)); if (r) api(`/api/location/places/${p.id}`, { radius: r }).then(loadPlaces); } }, "Size"),
+        el("button", { class: "btn", title: "Delete", onclick: () => confirm(`Delete ${p.name}?`) && api(`/api/location/places/${p.id}`, { delete: true }).then(loadPlaces) }, "×")))),
+    !d.places.length && !d.suggestions.length ? el("p", { class: "help" }, "Name places from your stops, or wait a few days for Home and Work suggestions.") : null);
+}
+function renderTrackers(d) {
+  const card = $("#trackerscard");
+  const name = el("input", { type: "text", placeholder: "e.g. My iPhone", style: "flex:1" });
+  const out = el("div");
+  const add = el("button", { class: "btn primary" }, "Add phone (OwnTracks)");
+  add.onclick = async () => {
+    const r = await api("/api/location/trackers", { name: name.value });
+    if (!r.ok) { alert(r.error); return; }
+    trackerSetup = r;  // keep the one-time setup on screen through the reload
+    loadPlaces();
+  };
+  if (trackerSetup) {
+    const r = trackerSetup;
+    put(out, el("div", { class: "howto", style: "margin-top:10px" },
+      el("strong", {}, `Set up OwnTracks on ${r.name}`),
+      el("p", { style: "margin:6px 0" }, "1. Install OwnTracks (App Store / Play Store). 2. Scan this QR code with the phone's camera and open it in OwnTracks. It configures itself."),
+      el("img", { src: r.qr, width: "200", height: "200", alt: "OwnTracks setup QR code", style: "background:#fff;border-radius:8px" }),
+      el("details", {}, el("summary", { class: "help", style: "cursor:pointer" }, "Or enter it by hand"),
+        el("div", { class: "help" }, "Mode: HTTP · URL: ", el("code", {}, r.url), " · Authentication on · Username: jarvis · Password: the code below"),
+        el("div", { class: "keybox" }, r.token)),
+      el("p", { class: "help" }, "The code is shown only once. Away from home, the phone needs your VPN to reach Jarvis; OwnTracks keeps points and sends them later."),
+      el("button", { class: "btn", onclick: () => { trackerSetup = null; loadPlaces(); } }, "Done")));
+  }
+  put(card, el("strong", {}, "Phones sending location"),
+    d.trackers.length ? d.trackers.map(t => el("div", { class: "item" }, el("div", { class: "grow" }, el("div", {}, t.name), el("div", { class: "when" }, t.last_seen ? `last seen ${t.last_seen}` : "not used yet")),
+      el("div", { class: "acts" }, el("button", { class: "btn", onclick: () => {
+        if (!confirm(`Remove ${t.name}? It can't send locations any more.`)) return;
+        api(`/api/location/trackers/${t.id}/delete`, { delete_history: confirm("Also delete its location history?") }).then(loadPlaces); } }, "Remove")))) :
+      el("p", { class: "help" }, "None yet. The Jarvis Android app can also share location: Settings > Share my location."),
+    el("div", { class: "row", style: "margin-top:8px" }, name, add), out,
+    el("div", { class: "row", style: "margin-top:12px" }, el("button", { class: "btn danger", onclick: () => {
+      const days = prompt("Delete location history. Type a number of days to delete the most recent ones, or ALL for everything.");
+      if (!days) return;
+      if (days.trim().toUpperCase() === "ALL" ? confirm("Delete ALL location history? This can't be undone.") : /^\d+$/.test(days.trim()))
+        api("/api/location/history/delete", { days: days.trim().toUpperCase() === "ALL" ? null : days.trim() }).then(loadPlaces);
+    } }, "Delete history...")));
+}
+$("#dayprev").onclick = () => { const d = new Date(placesDay + "T12:00"); d.setDate(d.getDate() - 1); placesDay = isoDay(d); loadPlaces(); };
+$("#daynext").onclick = () => { const d = new Date(placesDay + "T12:00"); d.setDate(d.getDate() + 1); placesDay = isoDay(d); loadPlaces(); };
+$("#daytoday").onclick = () => { placesDay = isoDay(new Date()); loadPlaces(); };
+$("#dayinput").onchange = e => { placesDay = e.target.value; loadPlaces(); };
+
 async function loadMail() {
   const card = $("#mailcard");
   const d = await api("/api/mail?hours=72");

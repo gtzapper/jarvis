@@ -319,6 +319,22 @@ weather / weather tomorrow / will it rain
 - Web pages are treated as untrusted text: the AI uses them as information and never follows instructions in them.
 - The page reader only fetches public internet addresses. Anything on your network (10.x, 192.168.x, the Jarvis host) is refused, even through redirects.
 
+## Location history (kept on your own server)
+Your phone sends its location to Jarvis, and only to Jarvis:
+- **OwnTracks** (free, open source, iPhone and Android): dashboard → **Places** → *Add phone (OwnTracks)* → scan the QR code with the phone. OwnTracks sets itself up. Each phone has its own code, and **Remove** locks it out (optionally deleting its history).
+- **The Jarvis Android app:** Settings → **Share my location** (every 15 minutes; choose "Allow all the time" so it works while the app is closed).
+
+What you get:
+- **The Places page:** a map of any day (OpenStreetMap; your browser downloads the map pictures, your history stays on the server), your stops with times, distance travelled, and time at home, work and your other places.
+- **Places:** Jarvis suggests Home and Work after a few days. Name any stop ("Gym", "Mum's") from the stops list, or say `call this place Gym`.
+- **Chat:** `where am I`, `where was I yesterday at 3pm`, `how far did I travel this week`, `location yesterday`. With the AI on, also things like "how long was I at work on Monday?"
+- **Location reminders:** `remind me to take the bins out when I get home`, `remind me to buy milk when I leave work`. They arrive through your reminder channels.
+- **Privacy:**
+  - Place names are never looked up online.
+  - History older than a year is deleted every night (Setup → Location history to change that).
+  - **Delete history...** on the Places page removes recent days or everything.
+- **Away from home:** the phone needs your VPN to reach Jarvis. OwnTracks keeps points and sends them when it can.
+
 ## Email screening
 Jarvis checks your inboxes every 15 minutes, and your **local AI** sorts each new message: important, personal, bill, newsletter, promotion, notification or spam. It also writes a one-line summary and picks out bills (payee, amount, due date).
 
@@ -584,6 +600,7 @@ The app allows plain `http://` because Jarvis normally runs at a local address. 
 Install the **ntfy** app, subscribe to a long random topic name, and set `NTFY_URL=https://ntfy.sh/<that-topic>` in `.env`. Anyone who knows the topic name can read it, so make it unguessable, or self-host ntfy.
 
 ## Roadmap
+- **Apple Health** (planned): steps, sleep, heart rate and workouts from the iPhone (Health Auto Export or an Apple Shortcut), with trends and a line in the daily report.
 1. ✅ Monitoring core
 2. Run 24/7 (Docker container or LXC on Proxmox)
 3. ✅ AI brain: free-form English on top of the text commands. Ask "how's the NAS?" in plain English (Claude API or local Ollama)

@@ -24,6 +24,7 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         intent?.getStringExtra("tab")?.let { startTab.value = it }
         if (vm.prefs.server.isNotEmpty() && vm.prefs.alerts) AlertWorker.schedule(this)
+        if (vm.prefs.server.isNotEmpty() && vm.prefs.shareLocation) LocationShare.schedule(this)
         setContent {
             JarvisTheme(vm.theme) {
                 JarvisApp(vm, startTab)

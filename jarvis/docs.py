@@ -34,6 +34,11 @@ class DocsError(Exception):
     pass
 
 
+def _ensure_schema(c):
+    from . import organizer
+    organizer.ensure(c, SCHEMA)
+
+
 def _db():
     from . import organizer
     return organizer.db()
@@ -153,7 +158,7 @@ def index(cfg: dict, only: Path | None = None) -> dict:
         files = [only]
     added = changed = failed = 0
     with _db() as c:
-        c.executescript(SCHEMA)
+        _ensure_schema(c)
         known = {r["path"]: dict(r) for r in c.execute("SELECT * FROM docs")}
     for p in files:
         rel = p.relative_to(DOCS).as_posix()
@@ -170,7 +175,7 @@ def index(cfg: dict, only: Path | None = None) -> dict:
         except DocsError as e:
             pieces, vecs, err, pages = [], [], str(e), []
         with _db() as c:
-            c.executescript(SCHEMA)
+            _ensure_schema(c)
             old = c.execute("SELECT id FROM docs WHERE path = ?", (rel,)).fetchone()
             if old:
                 c.execute("DELETE FROM chunks WHERE doc = ?", (old[0],))
@@ -200,7 +205,7 @@ def index(cfg: dict, only: Path | None = None) -> dict:
 
 def documents() -> list[dict]:
     with _db() as c:
-        c.executescript(SCHEMA)
+        _ensure_schema(c)
         rows = [dict(r) for r in c.execute("SELECT * FROM docs ORDER BY added DESC")]
     for r in rows:
         r["meta"] = json.loads(r["meta"]) if r.get("meta") else None
@@ -209,7 +214,7 @@ def documents() -> list[dict]:
 
 def delete(doc_id: int) -> str:
     with _db() as c:
-        c.executescript(SCHEMA)
+        _ensure_schema(c)
         r = c.execute("SELECT path FROM docs WHERE id = ?", (doc_id,)).fetchone()
         if not r:
             raise ValueError("No such document")
@@ -242,7 +247,7 @@ def search(cfg: dict, question: str, k: int = 6) -> list[dict]:
     q = embed([question], url, emb_model)[0]
     qn = math.sqrt(sum(x * x for x in q)) or 1.0
     with _db() as c:
-        c.executescript(SCHEMA)
+        _ensure_schema(c)
         rows = c.execute("SELECT chunks.id, chunks.page, chunks.text, chunks.vec, chunks.norm, docs.path, docs.title FROM chunks JOIN docs ON docs.id = chunks.doc").fetchall()
     scored = []
     for r in rows:

@@ -45,6 +45,8 @@ HELP = """Things I understand:
   weather / weather tomorrow / will it rain
   security digest / open ports / internet speed / public ip / name device 10.0.20.44 as Living room TV
   ask my documents when does my car insurance renew / my documents
+  where am I / where was I yesterday at 3pm / how far did I travel this week / location today
+  remind me to take the bins out when I get home / call this place Gym
   search the web for best 2.5GbE switch   (with the AI on, Jarvis reads the pages and sums up with sources)
   search movie dune              look something up (also: show, artist)
   add movie dune                 add it and start searching (also: show, artist)
@@ -143,6 +145,7 @@ class Assistant:
             (r"^(playing|now playing|streams?|who'?s (watching|streaming)( plex)?)$", self.playing),
             (r"^(recent|recently added|what'?s new)$", self.recent),
             (r"^(upcoming (releases|episodes|movies)|releases|what'?s coming out)( (?P<days>\d+) days?)?$", self.upcoming),
+            (r"^remind me (to )?(?P<what>.+?) when I (?P<ev>get (to|home)|arrive (at|home)|reach|leave|get back( to)?)\s*(?P<place>.*)$", self.remind_at_place),
             (r"^remind me (?P<rest>.+)$", self.remind),
             (r"^(reminders|my reminders|list reminders|show reminders)$", self.list_reminders),
             (r"^(cancel|delete|remove) reminder (?P<n>\d+)$", self.cancel_reminder),
@@ -177,6 +180,11 @@ class Assistant:
             (r"^(ask|search|check) (my )?(documents|docs|files)( for| about)?[:,]? (?P<q>.+)$", self.ask_documents),
             (r"^(documents|my documents|docs|my docs|receipts|my receipts)$", self.list_documents),
             (r"^(search the web|web search|google|look up online|research)( for)?[:,]? (?P<q>.+)$", self.web_search),
+            (r"^(where am i|where'?s my phone|my location)$", self.where_am_i),
+            (r"^where was i (?P<when>.+)$", self.where_was_i_cmd),
+            (r"^(how far|distance)( did i (travel|go|drive))?( (?P<span>today|yesterday|this week))?$", self.how_far),
+            (r"^(location|places|my day)( (?P<span>today|yesterday))?$", self.how_far),
+            (r"^(call|name|save) (this|here|where i am)( place)?( as)? (?P<name>.+)$", self.name_here),
             (r"^(daily report|morning report|my report|briefing|morning briefing|daily briefing|give me my (daily |morning )?(report|briefing))$", self.daily_report),
             (rf"^(search|hunt) (for )?missing (?P<kind>{KIND_WORDS})$", self.search_missing),
             (rf"^(search|find|look ?up) (for )?(the |a )?(?P<kind>{KIND_WORDS}) (?P<q>.+)$", self.search),
@@ -1105,6 +1113,64 @@ class Assistant:
         if not res:
             return f"No results for {q}."
         return f"Top results for {q}:\n" + "\n".join(f"  {r['title']}\n    {r['url']}" for r in res[:6])
+
+    # ------------------------------------------------------------ location
+
+    def remind_at_place(self, m) -> str:
+        from . import location
+        raw = m.m
+        ev = raw["ev"].lower()
+        place = (raw["place"] or "").strip(" .")
+        if "home" in ev and not place:
+            place = "home"
+        event = "leave" if ev.startswith("leave") else "arrive"
+        if not place:
+            return "Which place? For example: remind me to call mum when I leave work."
+        try:
+            return location.add_location_reminder(raw["what"], place, event)
+        except ValueError as e:
+            return str(e)
+
+    def where_am_i(self, m) -> str:
+        from datetime import datetime
+        from . import location
+        p = location.latest()
+        if not p:
+            return "No location yet. Add a phone on the Places page (OwnTracks or the Jarvis app)."
+        pl = location.place_at(p["lat"], p["lon"])
+        ago = (datetime.now().timestamp() - p["t"]) / 60
+        when = "just now" if ago < 2 else f"{ago:.0f} min ago" if ago < 120 else datetime.fromtimestamp(p["t"]).strftime("%a %H:%M")
+        return (f"At {pl['name']}" if pl else f"Somewhere I don't have a name for ({p['lat']:.4f}, {p['lon']:.4f})") + f", as of {when} ({p['tracker']})."
+
+    def where_was_i_cmd(self, m) -> str:
+        from datetime import datetime, timedelta
+        from . import location, organizer
+        raw = getattr(m, "m", None)
+        text = raw["when"] if isinstance(raw, re.Match) else m["when"]
+        when, _, _ = organizer.parse_when(text)
+        if not when:
+            return "When? For example: where was I yesterday at 3pm."
+        while when > datetime.now() + timedelta(minutes=5):
+            when -= timedelta(days=7)  # 'on tuesday' means the last one
+        return location.where_was_i(when)
+
+    def how_far(self, m) -> str:
+        from datetime import date, timedelta
+        from . import location
+        span = m["span"] or "today"
+        if span == "this week":
+            return location.week_summary()
+        return location.describe_day(date.today() - timedelta(days=1 if span == "yesterday" else 0))
+
+    def name_here(self, m) -> str:
+        from . import location
+        p = location.latest()
+        if not p:
+            return "I don't know where you are yet."
+        name = m.m["name"].strip(" .")
+        kind = name.lower() if name.lower() in ("home", "work") else "other"
+        location.add_place(name.title() if kind != "other" else name, p["lat"], p["lon"], kind)
+        return f"Saved this place as {name}."
 
     def daily_report(self, m) -> str:
         from . import organizer as O

@@ -102,6 +102,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import kotlinx.coroutines.launch
 import org.json.JSONObject
 
 private val QUICK = listOf("status", "media status", "downloads", "torrents", "who's watching", "upcoming", "requests", "hosts", "check updates on all")
@@ -811,6 +812,9 @@ fun SettingsScreen(vm: JarvisViewModel) {
         }
         SettingRow("Speak replies", "Read Jarvis's answer aloud when you asked by voice", speak) { speak = it; vm.prefs.speak = it }
 
+        SectionTitle("Location")
+        LocationRow(vm)
+
         SectionTitle("App updates")
         SettingRow("Check automatically", "Look for a new version once a day", autoUpdate) { autoUpdate = it; vm.prefs.autoUpdate = it }
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -830,6 +834,38 @@ fun SettingsScreen(vm: JarvisViewModel) {
         OutlinedButton({ vm.logout() }, Modifier.fillMaxWidth()) { Text("Log out / change Jarvis") }
         Text("Destructive actions always ask, whatever the mode.", fontSize = 12.sp, color = c.onSurfaceVariant)
     }
+}
+
+@Composable
+fun LocationRow(vm: JarvisViewModel) {
+    val context = LocalContext.current
+    var on by remember { mutableStateOf(vm.prefs.shareLocation) }
+    var note by remember { mutableStateOf("") }
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
+    fun enable() {
+        on = true; vm.prefs.shareLocation = true
+        LocationShare.schedule(context)
+        scope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            val ok = LocationShare.sendNow(context)
+            note = if (ok) "Sent your location just now. From now on, every 15 minutes." else "Turned on. Couldn't get a location yet (is location on?)"
+        }
+        if (!LocationShare.allowed(context, background = true))
+            note = "For updates while the app is closed, choose \"Allow all the time\" in the location permission."
+    }
+    val background = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { enable() }
+    val foreground = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { granted ->
+        if (granted.values.any { it }) {
+            if (Build.VERSION.SDK_INT >= 29 && !LocationShare.allowed(context, background = true)) background.launch(Manifest.permission.ACCESS_BACKGROUND_LOCATION)
+            else enable()
+        } else note = "Jarvis needs location permission to share your location."
+    }
+    SettingRow("Share my location", "Every 15 minutes, send this phone's location to your Jarvis (and nowhere else). See your days on the Places page.", on) { want ->
+        if (!want) { on = false; vm.prefs.shareLocation = false; LocationShare.cancel(context); note = "Stopped sharing." }
+        else if (LocationShare.allowed(context)) {
+            if (Build.VERSION.SDK_INT >= 29 && !LocationShare.allowed(context, background = true)) background.launch(Manifest.permission.ACCESS_BACKGROUND_LOCATION) else enable()
+        } else foreground.launch(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION))
+    }
+    if (note.isNotEmpty()) Text(note, fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
 }
 
 @Composable

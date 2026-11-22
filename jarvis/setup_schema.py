@@ -293,6 +293,11 @@ SERVICES: list[Service] = [
                  "even if Claude is your AI brain; with no local model, simple rules sort mail without summaries.",
             fields=[Field("ollama_url", "Ollama address", help="e.g. http://10.0.20.223:11434. Blank = the AI brain's"),
                     Field("model", "Model", help="e.g. gpt-oss:20b or qwen3:8b. Blank = the AI brain's")]),
+    Service("location_tracking", "Location history", "Planner", ("location_tracking",),
+            help="Your location history, kept only on this server: OwnTracks (iPhone/Android) or the Jarvis Android app send points "
+                 "here. Add a phone on the Places page (a QR code sets OwnTracks up). Jarvis works out stops, distances and time at "
+                 "your places, answers 'where was I', and runs reminders like 'when I get home'. Place names aren't looked up online.",
+            fields=[Field("keep_days", "Keep history for (days)", "int", default=365, help="Older points are deleted every night. 0 = keep forever")]),
     Service("location", "Weather & commute", "Planner", ("location",), test=_t_location,
             help="For the weather (Open-Meteo: free, no account) in the daily report and when you ask, and a typical drive time to "
                  "work on weekday mornings (no live traffic).",
