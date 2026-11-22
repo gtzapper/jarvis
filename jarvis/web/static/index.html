@@ -264,6 +264,7 @@ select.select, input[type=text], input[type=password], input[type=number], input
         <div class="card" id="appearancecard"></div>
         <div class="card" id="versioncard"></div>
         <div class="card" id="sshcard"></div>
+        <div class="card" id="devicescard"></div>
       </div>
       <div class="card" id="discovercard" style="margin-top:12px"></div>
     </section>
@@ -297,7 +298,7 @@ function show(view) {
   current = view;
   document.querySelectorAll("nav button[data-view]").forEach(b => b.classList.toggle("active", b.dataset.view === view));
   document.querySelectorAll("main > section").forEach(s => s.hidden = s.id !== view);
-  ({ dashboard: loadStatus, devices: loadDevices, activity: loadActivity, setup: loadSetup, chat: () => $("#input").focus() })[view]();
+  ({ dashboard: loadStatus, devices: loadDevices, activity: loadActivity, setup: loadSetup, chat: () => { $("#input").focus(); loadPending(); } })[view]();
   try { localStorage.setItem("jarvis.view", view); } catch {}
 }
 document.querySelectorAll("nav button[data-view]").forEach(b => b.onclick = () => show(b.dataset.view));
@@ -345,7 +346,9 @@ async function send(text, viaVoice = false) {
   bubble("you", text);
   const b = bubble("jarvis", el("span", { class: "progress" }, "..."));
   if (viaVoice) voice.state("Thinking...");
-  follow(await api("/api/chat", { text }), b, viaVoice);
+  const job = await api("/api/chat", { text });
+  b.dataset.job = job.id;  // so the pending-questions check doesn't show it twice
+  follow(job, b, viaVoice);
 }
 function follow(job, b, viaVoice = false) {
   const render = () => {
@@ -378,6 +381,21 @@ function follow(job, b, viaVoice = false) {
   };
   render(); poll();
 }
+// Questions waiting for an answer that started somewhere else, e.g. "Hey Jarvis, reboot the NAS" from a listening device.
+const shownPending = new Set();
+async function loadPending() {
+  let d;
+  try { d = await api("/api/pending"); } catch { return; }
+  for (const job of d.pending) {
+    if (shownPending.has(job.id) || document.querySelector(`[data-job="${job.id}"]`)) continue;
+    shownPending.add(job.id);
+    if (job.origin) bubble("you", `${job.origin} heard: "${job.text}"`);
+    const b = bubble("jarvis", "");
+    b.dataset.job = job.id;
+    follow(job, b);
+  }
+}
+setInterval(() => { if (current === "chat" && !document.hidden) loadPending(); }, 5000);
 $("#composer").onsubmit = e => { e.preventDefault(); const t = $("#input").value; $("#input").value = ""; voice.stop(); send(t); };
 
 /* ---------- voice: speak to Jarvis, hear the answer, optionally hands-free ---------- */
@@ -533,6 +551,7 @@ async function loadSetup() {
   if (!$("#discovercard").dataset.loaded) renderDiscoverIntro();
   renderStart();
   renderMediaIntro();
+  loadDevicesCard();
   renderTiles();
   if (openSvc && $("#svcdialog").open) openService(openSvc, true);
 }
@@ -659,6 +678,34 @@ async function scanMedia() {
     r.found.length ? el("div", { class: "tablewrap" }, el("table", {}, el("thead", {}, el("tr", {}, ["App", "Where", "Address", "Key", ""].map(h => el("th", {}, h)))), el("tbody", {}, rows))) : null,
     r.notes.length ? el("details", { style: "margin-top:10px" }, el("summary", { class: "help", style: "cursor:pointer" }, `${r.notes.length} place(s) couldn't be checked`),
       el("ul", { class: "help" }, r.notes.map(n => el("li", {}, n)))) : null);
+}
+async function loadDevicesCard(newDevice) {
+  const card = $("#devicescard");
+  const d = await api("/api/voice/devices");
+  const name = el("input", { type: "text", placeholder: "e.g. Kitchen Pi", style: "flex:1;min-width:120px" });
+  const msg = el("div", { class: "fhelp" });
+  const add = el("button", { class: "btn" }, "Add device");
+  add.onclick = async () => {
+    add.disabled = true;
+    const r = await api("/api/voice/devices", { name: name.value });
+    add.disabled = false;
+    if (!r.ok) { msg.className = "fhelp result bad"; msg.textContent = r.error; return; }
+    loadDevicesCard(r);
+  };
+  let fresh = null;
+  if (newDevice) {
+    const copy = el("button", { class: "btn" }, "Copy");
+    copy.onclick = async () => { try { await navigator.clipboard.writeText(newDevice.token); copy.textContent = "Copied"; } catch { copy.textContent = "Select and copy it manually"; } };
+    fresh = el("div", { class: "howto", style: "margin-top:10px" }, el("strong", {}, `Access code for ${newDevice.name}`),
+      el("div", { class: "keybox" }, newDevice.token), copy,
+      el("div", { class: "fhelp", style: "margin-top:6px" }, "Shown only once. The listener program asks for it together with Jarvis's address."));
+  }
+  put(card, el("strong", {}, "Listening devices"),
+    el("p", { class: "help", style: "margin:4px 0 8px" }, "Devices that listen for \"Hey Jarvis\" (a Raspberry Pi or a PC). Each gets its own access code; removing a device locks it out. Needs Setup > Voice."),
+    d.devices.length ? el("ul", { class: "help", style: "margin:0 0 10px;padding-left:18px" }, d.devices.map(x =>
+      el("li", {}, `${x.name} `, el("span", { class: "kind" }, x.last_seen ? `(last heard ${x.last_seen})` : "(not used yet)"), " ",
+        el("button", { class: "more", onclick: async () => { if (confirm(`Remove ${x.name}? It won't be able to talk to Jarvis any more.`)) { await api(`/api/voice/devices/${x.id}/delete`, {}); loadDevicesCard(); } } }, "Remove")))) : null,
+    el("div", { class: "row" }, name, add), msg, fresh);
 }
 function renderAppearance() {
   const current = window.JarvisTheme ? JarvisTheme.get() : "system";

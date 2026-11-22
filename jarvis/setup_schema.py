@@ -90,6 +90,11 @@ def _t_notify(cfg, e):
     return "Test notification sent. Check your phone"
 
 
+def _t_voice(cfg, e):
+    from .voice import test_voice
+    return test_voice(cfg)
+
+
 def _t_ai(cfg, e):
     from .brain import test_connection
     return test_connection(cfg)
@@ -208,6 +213,22 @@ SERVICES: list[Service] = [
                           help="off = faster replies on thinking models like qwen3.5; auto = the model's default"),
                     Field("num_ctx", "Context size (Ollama only)", "int", default=32768,
                           help="Tokens the model can see. Jarvis's tools need about 5k; lower it if you run out of GPU memory"),
+                    Field("enabled", "Enabled", "bool", default=True)]),
+    Service("voice", "Voice (Hey Jarvis)", "AI & automation", ("voice",), test=_t_voice,
+            help="Speech for listening devices: Whisper turns speech into text and Kokoro speaks the answers, both in a "
+                 "Speaches server. Easiest: start the one bundled with Jarvis with 'docker compose --profile voice up -d' "
+                 "and keep the address below. Running Speaches somewhere else (e.g. the CUDA image on a GPU machine)? "
+                 "Put its address here. Save & test downloads the models the first time (a few hundred MB).",
+            fields=[Field("url", "Voice server address", default="http://voice:8000",
+                          help="http://voice:8000 = the Speaches container next to Jarvis; or http://<ip>:8000"),
+                    Field("stt_model", "Speech-to-text model", default="Systran/faster-distil-whisper-small.en",
+                          help="Fast English on a CPU. Other languages: Systran/faster-whisper-small. Best (GPU): Systran/faster-whisper-large-v3"),
+                    Field("language", "Language", default="en", help="e.g. en, de, hi. Blank = detect automatically"),
+                    Field("tts_model", "Voice model", default="speaches-ai/Kokoro-82M-v1.0-ONNX"),
+                    Field("voice", "Voice", default="bm_george",
+                          help="Kokoro voices, e.g. bm_george or bm_lewis (British male), am_michael (American male), af_heart or bf_emma (female)"),
+                    Field("api_key_env", "Voice server API key", "secret", env="VOICE_API_KEY",
+                          help="Only if you set API_KEY on the Speaches container"),
                     Field("enabled", "Enabled", "bool", default=True)]),
     Service("notify", "Phone alerts (ntfy)", "Alerts", ("notify",), test=_t_notify,
             help="Install the ntfy app, subscribe to a long random topic, use https://ntfy.sh/<topic>.",

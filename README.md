@@ -245,7 +245,19 @@ you> slow the downloads down, I'm gaming
 
 **Approvals are never by voice.** When Jarvis needs a yes (anything destructive, or every change in Ask mode), it says "I need your OK on the screen" and waits for a tap. Someone else talking, or a TV, can't approve a reboot.
 
-An offline "Hey Jarvis" setup (wake word, Whisper and Piper on your own server, with a listening device in the room) is planned next.
+### "Hey Jarvis" (offline voice)
+Speech is handled on your own network by a **Speaches** server: Whisper turns speech into text and Kokoro speaks the answers. Nothing goes to the cloud.
+
+1. **Start the voice server** next to Jarvis (CPU):
+   ```
+   docker compose --profile voice up -d
+   ```
+   Or run Speaches anywhere else, for example `ghcr.io/speaches-ai/speaches:latest-cuda` on a machine with a GPU (it's also in Unraid's Community Apps).
+2. **Setup → Voice (Hey Jarvis):** keep `http://voice:8000` for the bundled one, or enter the other server's address. **Save & test** downloads the speech and voice models the first time (a few hundred MB), then checks a full round trip. The defaults are picked for a CPU: a small, fast English Whisper model and the British `bm_george` voice. Other languages and bigger models are explained under each field.
+3. **Setup → Listening devices → Add device** (for example "Kitchen Pi"). You get an access code, shown once. Each device has its own code; removing the device locks it out. Device codes only work for voice requests, never for the dashboard.
+4. **Install the listener** on a Raspberry Pi or a PC with a microphone and speaker (coming next).
+
+When a spoken request needs your OK, the device says "That needs your OK" and the question appears in the dashboard chat and the Android app, labelled with the device's name. With ntfy set up, your phone also gets a push alert. Once you tap, the device speaks the result.
 
 ## Permission modes (Ask, Auto, Read-only)
 Like Claude Code, Jarvis has modes for how much it may do without asking. Switch them with the pill above the chat box, or type `ask mode`, `auto mode` or `read-only mode` (`mode` shows the current one).

@@ -181,7 +181,24 @@ class JarvisViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun refreshAll() {
-        loadMode(); loadStatus(); loadActivity()
+        loadMode(); loadStatus(); loadActivity(); loadPending()
+    }
+
+    /** Questions waiting for an answer that started elsewhere, e.g. "Hey Jarvis, reboot the NAS" from a listening device. */
+    fun loadPending() = viewModelScope.launch {
+        val d = io { api.get("/api/pending") } ?: return@launch
+        val arr = d.optJSONArray("pending") ?: return@launch
+        val shown = messages.mapNotNull { it.jobId }.toSet()
+        for (i in 0 until arr.length()) {
+            val job = arr.getJSONObject(i)
+            val id = job.optString("id")
+            if (id in shown) continue
+            val origin = job.optString("origin").takeIf { it.isNotEmpty() && it != "null" }
+            if (origin != null) messages += ChatMsg(true, "$origin heard: \"${job.optString("text")}\"")
+            messages += ChatMsg(false, jobId = id)
+            val index = messages.lastIndex
+            launch { follow(index, job, false) }
+        }
     }
 
     // ------------------------------------------------------------ mode

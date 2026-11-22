@@ -16,3 +16,23 @@ services:
       - .:/app
       # Jarvis's config.yaml, .env (keys and passwords), data/ and .ssh/ key.
       - ./config:/config
+
+  # Optional: speech for "Hey Jarvis" (Whisper speech-to-text + Kokoro voice), on the CPU.
+  # Start it with:  docker compose --profile voice up -d
+  # Then Setup > Voice keeps the default address http://voice:8000. Models download on the first Save & test.
+  # Have a GPU elsewhere? Run ghcr.io/speaches-ai/speaches:latest-cuda there instead and put its address in Setup > Voice.
+  voice:
+    image: ghcr.io/speaches-ai/speaches:latest-cpu
+    container_name: jarvis-voice
+    profiles: ["voice"]
+    restart: unless-stopped
+    environment:
+      ENABLE_UI: "false"
+      WHISPER__COMPUTE_TYPE: "int8"
+      STT_MODEL_TTL: "-1"   # keep the speech model loaded: the first command after idle shouldn't wait for it
+      TTS_MODEL_TTL: "-1"
+    volumes:
+      - voice-models:/home/ubuntu/.cache/huggingface/hub   # a Docker volume, so file ownership just works
+
+volumes:
+  voice-models:

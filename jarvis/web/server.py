@@ -13,7 +13,7 @@ import uuid
 from dataclasses import asdict
 from pathlib import Path
 
-from flask import Flask, abort, jsonify, redirect, request, send_from_directory, session
+from flask import Flask, abort, g, jsonify, redirect, request, send_from_directory, session
 
 from .. import setup_schema as S
 from ..audit import AUDIT_LOG
@@ -44,6 +44,8 @@ class Job:
         self.prompt: dict | None = None
         self.reply = ""
         self.created = time.time()
+        self.origin: str | None = None      # a listening device's name, for requests made by voice
+        self.device_id: str | None = None
 
 
 class State:
@@ -129,6 +131,14 @@ def create_app(state: State, password: str | None) -> Flask:
     @app.before_request
     def guard():
         if request.path in ("/login", "/favicon.ico") or request.path in APP_FILES:  # the app icon and manifest hold no data
+            return None
+        if request.path.startswith("/api/voice/device/"):
+            # listening devices sign in with their own access code (Setup > Listening devices), never the dashboard password
+            from ..voice import device_for
+            auth = request.headers.get("Authorization", "")
+            g.device = device_for(auth[7:].strip() if auth.lower().startswith("bearer ") else None)
+            if not g.device:
+                return jsonify(error="unknown or revoked device code"), 401
             return None
         if password and not session.get("ok"):
             return (jsonify(error="login required"), 401) if request.path.startswith("/api/") else redirect("/login")
@@ -321,6 +331,108 @@ def create_app(state: State, password: str | None) -> Flask:
         S.remove(sid, int((request.json or {}).get("index", 0)))
         state.reload()
         return jsonify(ok=True)
+
+    # ------------------------------------------------------------ voice: listening devices ("Hey Jarvis")
+
+    def voice_view(job: Job, client, heard: str, with_audio: bool):
+        """What a listening device gets back: what Jarvis heard, the state, and the spoken answer as WAV (base64)."""
+        import base64
+        from ..monitor import Notifier
+        out = {"job_id": job.id, "heard": heard, "status": {"running": "running", "input": "waiting", "done": "done"}[job.status]}
+        text = ""
+        if job.status == "input":
+            if not getattr(job, "notified", False):
+                job.notified = True
+                q = (job.prompt or {}).get("question", "").replace("[destructive] ", "").split("\n")[0]
+                with state.lock:
+                    Notifier(state.cfg).send("Jarvis needs your OK", f"{job.origin}: {q or job.text}. Open Jarvis to answer.")
+            text = "That needs your OK. I've put the question on your phone and the dashboard."
+        elif job.status == "done":
+            text = job.reply
+        out["reply"] = text
+        if with_audio and text:
+            try:
+                out["audio"] = base64.b64encode(client.speak(text)).decode()
+            except Exception as e:
+                out["audio_error"] = str(e)
+        return jsonify(out)
+
+    def voice_client():
+        from ..voice import VoiceClient
+        with state.lock:
+            cfg = state.cfg
+        v = cfg.get("voice")
+        if not v or not v.get("enabled", True):
+            abort(jsonify(error="Voice isn't set up in Jarvis yet (Setup > Voice)"), 503)
+        return VoiceClient(cfg)
+
+    @app.get("/api/voice/device/hello")
+    def voice_hello():
+        v = state.cfg.get("voice") or {}
+        return jsonify(ok=True, device=g.device["name"], voice_ready=bool(v) and v.get("enabled", True))
+
+    @app.post("/api/voice/device/turn")
+    def voice_turn():
+        """One spoken request: WAV in, Jarvis's spoken answer out. Long jobs return 'running'; poll /job/<id>."""
+        from ..voice import VoiceError
+        audio = request.get_data(cache=False)
+        if not audio:
+            return jsonify(error="no audio"), 400
+        if len(audio) > 15 * 1024 * 1024:
+            return jsonify(error="audio too long"), 413
+        client = voice_client()
+        try:
+            heard = client.transcribe(audio)
+        except VoiceError as e:
+            return jsonify(error=str(e)), 502
+        if not heard:
+            return jsonify(status="empty", heard="", reply="")
+        job = Job(heard)
+        job.origin, job.device_id = g.device["name"], g.device["id"]
+        state.jobs[job.id] = job
+        state.start_job(job)
+        deadline = time.time() + 60
+        while job.status == "running" and time.time() < deadline:
+            time.sleep(0.3)
+        return voice_view(job, client, heard, with_audio=job.status != "running")
+
+    @app.get("/api/voice/device/job/<job_id>")
+    def voice_job(job_id):
+        job = state.jobs.get(job_id)
+        if not job or getattr(job, "device_id", None) != g.device["id"]:
+            abort(404)
+        return voice_view(job, voice_client(), job.text, with_audio=job.status == "done" and request.args.get("speak") == "1")
+
+    @app.get("/api/voice/devices")
+    def voice_devices():
+        from ..voice import list_devices
+        return jsonify(devices=list_devices())
+
+    @app.post("/api/voice/devices")
+    def voice_device_add():
+        from ..audit import audit
+        from ..voice import add_device
+        try:
+            d = add_device((request.json or {}).get("name", ""))
+        except ValueError as e:
+            return jsonify(ok=False, error=str(e))
+        audit(f"voice: added listening device {d['name']}")
+        return jsonify(ok=True, **d)
+
+    @app.post("/api/voice/devices/<device_id>/delete")
+    def voice_device_delete(device_id):
+        from ..audit import audit
+        from ..voice import remove_device
+        remove_device(device_id)
+        audit(f"voice: removed listening device {device_id}")
+        return jsonify(ok=True)
+
+    @app.get("/api/pending")
+    def pending():
+        """Questions waiting for an answer, e.g. a reboot asked for by voice: shown in the dashboard and the app."""
+        return jsonify(pending=[{"id": j.id, "text": j.text, "origin": getattr(j, "origin", None), "prompt": j.prompt,
+                                 "progress": j.progress, "status": j.status}
+                                for j in list(state.jobs.values()) if j.status == "input"])
 
     @app.post("/api/media-discover")
     def media_discover():
