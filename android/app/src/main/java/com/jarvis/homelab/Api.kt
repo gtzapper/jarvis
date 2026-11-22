@@ -26,6 +26,9 @@ class Prefs(context: Context) {
     var knownProblems: Set<String>?
         get() = sp.getStringSet("known_problems", null)
         set(v) = sp.edit().putStringSet("known_problems", v).apply()
+    var handsFree: Boolean
+        get() = sp.getBoolean("hands_free", false)
+        set(v) = sp.edit().putBoolean("hands_free", v).apply()
     var theme: String
         get() = sp.getString("theme", "system") ?: "system"
         set(v) = sp.edit().putString("theme", v).apply()

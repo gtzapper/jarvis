@@ -129,8 +129,17 @@ dialog.sheet::backdrop { background: rgba(0,0,0,.45); backdrop-filter: blur(2px)
 .entry-title { font-weight: 600; margin-bottom: 10px; display: flex; justify-content: space-between; align-items: center; }
 .x { background: none; border: 0; font-size: 22px; line-height: 1; cursor: pointer; color: var(--muted); padding: 4px 8px; border-radius: 8px; }
 .x:hover { background: var(--panel2); color: var(--text); }
+.btn.icon { padding: 0 11px; display: grid; place-items: center; }
+.btn.icon svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.btn.icon.on { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+.btn.icon.live { background: var(--crit); border-color: var(--crit); color: #fff; }
+.voicebar { display: flex; align-items: center; gap: 10px; padding: 8px 12px; margin-bottom: 8px; border-radius: 10px; background: var(--accent-soft); border: 1px solid var(--line); font-size: 13px; }
+.voicebar #voicestate { flex: 1; }
+.voicebar .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--accent); animation: pulse 1.2s infinite; }
+@keyframes pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: .35; transform: scale(.7); } }
 .composer { display: flex; gap: 8px; }
-.composer input { flex: 1; padding: 11px 13px; border-radius: 10px; border: 1px solid var(--line); background: var(--panel); }
+.composer input { flex: 1; min-width: 0; padding: 11px 13px; border-radius: 10px; border: 1px solid var(--line); background: var(--panel); }
+.composer .btn { flex: none; }
 /* tables & forms */
 table { width: 100%; border-collapse: collapse; font-size: 13px; }
 th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); }
@@ -212,8 +221,11 @@ select.select, input[type=text], input[type=password], input[type=number], input
           <div class="modes" id="modes" role="radiogroup" aria-label="Permission mode"></div>
           <span class="modehelp" id="modehelp"></span>
         </div>
+        <div class="voicebar" id="voicebar" hidden><span class="dot"></span><span id="voicestate">Listening...</span><button type="button" class="btn" id="voicestop">Stop</button></div>
         <form class="composer" id="composer">
           <input id="input" autocomplete="off" placeholder="Tell Jarvis what to do..." enterkeyhint="send">
+          <button type="button" class="btn icon" id="mic" title="Speak to Jarvis" aria-label="Speak to Jarvis"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 14a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3zM19 11a7 7 0 0 1-14 0M12 18v3"/></svg></button>
+          <button type="button" class="btn icon" id="handsfree" title="Hands-free: after each answer, Jarvis listens again" aria-label="Hands-free conversation" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 14v-2a9 9 0 0 1 18 0v2M3 14a2 2 0 0 1 2-2h1v7H5a2 2 0 0 1-2-2zM21 14a2 2 0 0 0-2-2h-1v7h1a2 2 0 0 0 2-2z"/></svg></button>
           <button class="btn primary">Send</button>
         </form>
       </div>
@@ -328,13 +340,14 @@ setInterval(() => { if (current === "dashboard" && !document.hidden) loadStatus(
 const QUICK = ["status", "media status", "downloads", "torrents", "who's watching", "upcoming", "requests", "hosts", "new chat", "help"];
 put($("#chips"), ...QUICK.map(q => el("button", { class: "chip", onclick: () => send(q) }, q)));
 function bubble(cls, text) { const b = el("div", { class: `msg ${cls}` }, text); $("#msgs").append(b); b.scrollIntoView({ block: "end" }); return b; }
-async function send(text) {
+async function send(text, viaVoice = false) {
   if (!text.trim()) return;
   bubble("you", text);
   const b = bubble("jarvis", el("span", { class: "progress" }, "..."));
-  follow(await api("/api/chat", { text }), b);
+  if (viaVoice) voice.state("Thinking...");
+  follow(await api("/api/chat", { text }), b, viaVoice);
 }
-function follow(job, b) {
+function follow(job, b, viaVoice = false) {
   const render = () => {
     const parts = [];
     if (job.progress.length) parts.push(el("ul", { class: "steps" }, job.progress.map(p => el("li", { class: p.startsWith("  ") ? "sub" : "" }, p.trim()))));
@@ -342,6 +355,8 @@ function follow(job, b) {
     if (job.status === "done") parts.push(el("div", {}, job.reply));
     if (job.status === "input" && job.prompt) {
       const answer = async a => { b.querySelectorAll("button").forEach(x => x.disabled = true); job = await api(`/api/chat/${job.id}/answer`, { answer: a }); render(); poll(); };
+      // Approvals are always a tap, never a spoken "yes": a TV or someone else talking can't approve anything.
+      if (viaVoice && !b.dataset.asked) { b.dataset.asked = "1"; voice.waitForTap(job.prompt.type === "confirm" ? "I need your OK on the screen." : "Pick one on the screen."); }
       if (job.prompt.type === "confirm") {
         const risky = job.prompt.question.startsWith("[destructive] ");
         parts.push(risky ? el("div", { class: "warn" }, "Destructive, so I always ask:") : null, el("div", {}, job.prompt.question.replace(/^\[destructive\] /, "")),
@@ -356,11 +371,90 @@ function follow(job, b) {
   };
   const poll = async () => {
     while (job.status === "running") { await new Promise(r => setTimeout(r, 800)); job = await api(`/api/chat/${job.id}`); render(); }
-    if (job.status === "done") loadMode();  // "auto mode" typed in chat
+    if (job.status === "done") {
+      loadMode();  // "auto mode" typed in chat
+      if (viaVoice) voice.reply(job.reply);
+    }
   };
   render(); poll();
 }
-$("#composer").onsubmit = e => { e.preventDefault(); const t = $("#input").value; $("#input").value = ""; send(t); };
+$("#composer").onsubmit = e => { e.preventDefault(); const t = $("#input").value; $("#input").value = ""; voice.stop(); send(t); };
+
+/* ---------- voice: speak to Jarvis, hear the answer, optionally hands-free ---------- */
+const voice = (() => {
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  const canListen = !!SR && window.isSecureContext;
+  const canSpeak = "speechSynthesis" in window;
+  const STOP_WORDS = /^(stop|stop listening|that'?s all|thanks?( you)?( jarvis)?|goodbye|bye|cancel|never ?mind)[.!]?$/i;
+  let handsFree = false, rec = null, active = false;
+  try { handsFree = localStorage.getItem("jarvis.handsfree") === "1"; } catch {}
+  const bar = $("#voicebar"), mic = $("#mic"), hf = $("#handsfree");
+
+  function state(text) { if (!active && !handsFree) return; bar.hidden = false; $("#voicestate").textContent = text; }
+  function idle() { active = false; mic.classList.remove("live"); if (!handsFree) bar.hidden = true; else $("#voicestate").textContent = "Hands-free is on. I stopped listening after the silence; tap the mic to talk again."; }
+  function setHandsFree(on) {
+    handsFree = on; hf.classList.toggle("on", on); hf.setAttribute("aria-pressed", String(on));
+    try { localStorage.setItem("jarvis.handsfree", on ? "1" : "0"); } catch {}
+    if (on) listen(); else stop();
+  }
+  function listen() {
+    if (!canListen) { mic.title = "Voice input needs HTTPS (or opening Jarvis on this computer). Replies can still be spoken."; return; }
+    if (rec) return;
+    speechSynthesis && speechSynthesis.cancel();
+    rec = new SR();
+    rec.lang = navigator.language || "en-US";
+    rec.interimResults = true;
+    rec.maxAlternatives = 1;
+    let finalText = "";
+    active = true; mic.classList.add("live"); state("Listening...");
+    rec.onresult = e => {
+      let interim = "";
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        const t = e.results[i][0].transcript;
+        if (e.results[i].isFinal) finalText += t; else interim += t;
+      }
+      $("#input").value = (finalText + interim).trim();
+    };
+    rec.onerror = e => { if (e.error === "not-allowed") { state("Microphone blocked. Allow it in the browser's site settings."); handsFree = false; hf.classList.remove("on"); } };
+    rec.onend = () => {
+      rec = null;
+      const text = finalText.trim();
+      $("#input").value = "";
+      if (!text) { idle(); return; }
+      if (STOP_WORDS.test(text)) { setHandsFree(false); speak("Okay."); idle(); bar.hidden = true; return; }
+      send(text, true);
+    };
+    rec.start();
+  }
+  function speak(text, then) {
+    if (!canSpeak || !text) { then && then(); return; }
+    speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance(text.slice(0, 3000));
+    u.lang = navigator.language || "en-US";
+    u.onend = u.onerror = () => then && then();
+    speechSynthesis.speak(u);
+  }
+  function reply(text) {
+    state("Speaking...");
+    speak(text, () => { if (handsFree) listen(); else idle(); });
+  }
+  function waitForTap(message) {
+    state(message);
+    speak(message);
+    // keep hands-free paused until the answer is tapped; reply() picks up again when the job finishes
+  }
+  function stop() {
+    if (rec) { rec.onend = null; rec.abort(); rec = null; }
+    canSpeak && speechSynthesis.cancel();
+    active = false; mic.classList.remove("live"); bar.hidden = true;
+  }
+  mic.onclick = () => (rec ? stop() : listen());
+  hf.onclick = () => setHandsFree(!handsFree);
+  $("#voicestop").onclick = () => { setHandsFree(false); stop(); };
+  if (!canListen) { mic.title = SR ? "Voice input needs HTTPS (or opening Jarvis on this computer)" : "This browser can't do voice input (try Chrome or Edge)"; mic.disabled = !SR || !window.isSecureContext; hf.disabled = mic.disabled; }
+  if (handsFree && canListen) { hf.classList.add("on"); hf.setAttribute("aria-pressed", "true"); }
+  return { listen, reply, waitForTap, stop, state, canListen };
+})();
 bubble("jarvis", "Hi. Tell me what you want done and I'll work out the steps, showing you what I'm doing as I go. Destructive things always ask you first.");
 const MODE_LABELS = { ask: "Ask", auto: "Auto", "read-only": "Read-only" };
 async function loadMode(set) {

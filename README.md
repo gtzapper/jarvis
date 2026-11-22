@@ -238,6 +238,15 @@ you> slow the downloads down, I'm gaming
 
 **Cost:** you pay Anthropic per use. A typical question with a couple of tool calls costs a few cents. To make it cheaper, set Effort to `low` in Setup. Model `claude-opus-5-5` is the default. The dashboard's `/api/ai` endpoint shows token usage since start.
 
+## Talking to Jarvis (voice)
+**Android app:** tap the mic and speak. Your words appear as you talk, and the answer is read aloud (Settings → Speak replies). The headset button turns on **hands-free**: after each answer Jarvis listens again, so you can keep talking without touching the phone. Say "stop", "that's all" or "thanks" to end it. If nothing is said for a few seconds, it stops listening until you tap the mic.
+
+**Web dashboard:** the same mic and headset buttons in Chat. Replies are spoken by your browser's built-in voice. Listening needs Chrome or Edge, and browsers only allow the microphone on HTTPS or on the computer running Jarvis (`localhost`). Over plain `http://` on your network the buttons are greyed out; use HTTPS (for example `tailscale serve`) or the Android app. In Chrome, speech-to-text is done by Google's servers; the Android app uses your phone's speech service (often on-device).
+
+**Approvals are never by voice.** When Jarvis needs a yes (anything destructive, or every change in Ask mode), it says "I need your OK on the screen" and waits for a tap. Someone else talking, or a TV, can't approve a reboot.
+
+An offline "Hey Jarvis" setup (wake word, Whisper and Piper on your own server, with a listening device in the room) is planned next.
+
 ## Permission modes (Ask, Auto, Read-only)
 Like Claude Code, Jarvis has modes for how much it may do without asking. Switch them with the pill above the chat box, or type `ask mode`, `auto mode` or `read-only mode` (`mode` shows the current one).
 

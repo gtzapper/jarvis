@@ -1,7 +1,13 @@
 package com.jarvis.homelab
 
 import android.app.Application
+import android.content.Intent
+import android.os.Bundle
+import android.speech.RecognitionListener
+import android.speech.RecognizerIntent
+import android.speech.SpeechRecognizer
 import android.speech.tts.TextToSpeech
+import android.speech.tts.UtteranceProgressListener
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
@@ -244,20 +250,28 @@ class JarvisViewModel(app: Application) : AndroidViewModel(app) {
             if (job == null) {
                 put(index, ChatMsg(false, "I couldn't send your answer."))
                 busy = false
-            } else follow(index, job, false)
+            } else follow(index, job, id in spokenJobs)
         }
     }
 
     private suspend fun follow(index: Int, first: JSONObject, spoken: Boolean) {
         var job = first
+        if (spoken) spokenJobs += first.optString("id")
         while (true) {
             show(index, job)
             when (job.optString("status")) {
-                "input" -> return            // wait for the person's answer; answer() picks it up again
+                "input" -> {                 // wait for the person's tap; answer() picks it up again
+                    if (spoken) {
+                        // approvals are always a tap, never a spoken "yes": a TV or someone else talking can't approve anything
+                        voiceState = "waiting"
+                        say(if (job.optJSONObject("prompt")?.optString("type") == "confirm") "I need your OK on the screen." else "Pick one on the screen.")
+                    }
+                    return
+                }
                 "done" -> {
                     busy = false
                     loadMode()               // "auto mode" typed in chat
-                    if (spoken && prefs.speak) say(job.optString("reply"))
+                    if (spoken) afterReply(job.optString("reply"))
                     return
                 }
             }
@@ -305,27 +319,111 @@ class JarvisViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch { io { api.post("/api/chat/reset") } }
     }
 
-    // ------------------------------------------------------------ speaking replies
+    // ------------------------------------------------------------ voice
 
-    private fun say(text: String) {
-        if (text.isBlank()) return
+    /** idle | listening | thinking | speaking | waiting (for a tap) */
+    var voiceState by mutableStateOf("idle")
+        private set
+    var heard by mutableStateOf("")
+        private set
+    var handsFree by mutableStateOf(prefs.handsFree)
+        private set
+    private val spokenJobs = mutableSetOf<String>()
+    private var recognizer: SpeechRecognizer? = null
+    private val stopWords = Regex("^(stop|stop listening|that'?s all|thanks?( you)?( jarvis)?|goodbye|bye|cancel|never ?mind)[.!]?$", RegexOption.IGNORE_CASE)
+
+    val canListenInApp: Boolean get() = SpeechRecognizer.isRecognitionAvailable(getApplication())
+
+    fun toggleHandsFree(): Boolean {
+        handsFree = !handsFree
+        prefs.handsFree = handsFree
+        if (!handsFree) stopVoice()
+        return handsFree
+    }
+
+    /** Start listening (must be called on the main thread, with the microphone permission granted). */
+    fun listen() {
+        if (busy && voiceState != "speaking") return
+        tts?.stop()
+        recognizer?.destroy()
+        val r = SpeechRecognizer.createSpeechRecognizer(getApplication())
+        recognizer = r
+        heard = ""
+        voiceState = "listening"
+        r.setRecognitionListener(object : RecognitionListener {
+            override fun onReadyForSpeech(params: Bundle?) {}
+            override fun onBeginningOfSpeech() {}
+            override fun onRmsChanged(rmsdB: Float) {}
+            override fun onBufferReceived(buffer: ByteArray?) {}
+            override fun onEndOfSpeech() { voiceState = "thinking" }
+            override fun onEvent(eventType: Int, params: Bundle?) {}
+            override fun onPartialResults(partial: Bundle?) {
+                partial?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()?.let { heard = it }
+            }
+            override fun onError(error: Int) {
+                // silence or nothing understood: stop quietly; the person taps the mic to talk again
+                voiceState = "idle"
+                heard = if (error == SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS) "Microphone permission is off" else ""
+            }
+            override fun onResults(results: Bundle?) {
+                val text = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()?.trim().orEmpty()
+                heard = ""
+                when {
+                    text.isEmpty() -> voiceState = "idle"
+                    stopWords.matches(text) -> {
+                        if (handsFree) toggleHandsFree()
+                        voiceState = "idle"
+                        say("Okay.")
+                    }
+                    else -> { voiceState = "thinking"; send(text, spoken = true) }
+                }
+            }
+        })
+        r.startListening(Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
+            .putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+            .putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
+            .putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault().toLanguageTag()))
+    }
+
+    fun stopVoice() {
+        recognizer?.cancel()
+        tts?.stop()
+        voiceState = "idle"
+        heard = ""
+    }
+
+    private fun afterReply(reply: String) {
+        if (prefs.speak && reply.isNotBlank()) {
+            voiceState = "speaking"
+            say(reply) { viewModelScope.launch { if (handsFree && voiceState == "speaking") listen() else if (voiceState == "speaking") voiceState = "idle" } }
+        } else if (handsFree) listen() else voiceState = "idle"
+    }
+
+    /** Speak [text]; [done] runs when it finishes (on any thread). */
+    private fun say(text: String, done: (() -> Unit)? = null) {
+        if (text.isBlank()) { done?.invoke(); return }
         val engine = tts
-        if (engine != null && ttsReady) {
-            engine.speak(text.take(3500), TextToSpeech.QUEUE_FLUSH, null, "reply")
-            return
+        fun go(e: TextToSpeech) {
+            e.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
+                override fun onStart(utteranceId: String?) {}
+                override fun onDone(utteranceId: String?) { done?.invoke() }
+                @Deprecated("Deprecated in Java")
+                override fun onError(utteranceId: String?) { done?.invoke() }
+            })
+            e.speak(text.take(3500), TextToSpeech.QUEUE_FLUSH, null, "reply-" + System.nanoTime())
         }
+        if (engine != null && ttsReady) { go(engine); return }
         tts = TextToSpeech(getApplication()) { status ->
             ttsReady = status == TextToSpeech.SUCCESS
-            if (ttsReady) {
-                tts?.language = Locale.getDefault()
-                tts?.speak(text.take(3500), TextToSpeech.QUEUE_FLUSH, null, "reply")
-            }
+            val e = tts
+            if (ttsReady && e != null) { e.language = Locale.getDefault(); go(e) } else done?.invoke()
         }
     }
 
-    fun stopSpeaking() { tts?.stop() }
+    fun stopSpeaking() = stopVoice()
 
     override fun onCleared() {
+        recognizer?.destroy()
         tts?.shutdown()
     }
 }

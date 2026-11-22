@@ -61,6 +61,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
@@ -212,6 +213,24 @@ fun ChatScreen(vm: JarvisViewModel) {
         }
     }
     val context = LocalContext.current
+    fun dialogVoice() {  // fallback: Google's voice dialog when in-app recognition isn't available
+        vm.stopSpeaking()
+        val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
+            .putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+            .putExtra(RecognizerIntent.EXTRA_PROMPT, "Tell Jarvis what to do")
+        try { voice.launch(intent) } catch (e: ActivityNotFoundException) {
+            android.widget.Toast.makeText(context, "No voice input app on this phone", android.widget.Toast.LENGTH_SHORT).show()
+        }
+    }
+    val micPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (granted) vm.listen()
+        else android.widget.Toast.makeText(context, "Jarvis needs the microphone to hear you", android.widget.Toast.LENGTH_SHORT).show()
+    }
+    fun startListening() {
+        if (!vm.canListenInApp) { dialogVoice(); return }
+        if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) vm.listen()
+        else micPermission.launch(Manifest.permission.RECORD_AUDIO)
+    }
 
     Column(Modifier.fillMaxSize().imePadding()) {
         LazyColumn(Modifier.weight(1f).fillMaxWidth(), state = list, contentPadding = PaddingValues(12.dp),
@@ -232,24 +251,49 @@ fun ChatScreen(vm: JarvisViewModel) {
             Text(vm.modeText, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(horizontal = 14.dp))
         }
+        if (vm.voiceState != "idle" || vm.handsFree || vm.heard.isNotEmpty()) VoiceBar(vm)
         Row(Modifier.fillMaxWidth().padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
             OutlinedTextField(input, { input = it }, placeholder = { Text("Tell Jarvis what to do...") },
                 modifier = Modifier.weight(1f), maxLines = 4, shape = RoundedCornerShape(24.dp),
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
                 keyboardActions = KeyboardActions(onSend = { vm.send(input); input = "" }))
-            IconButton(onClick = {
-                vm.stopSpeaking()
-                val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
-                    .putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-                    .putExtra(RecognizerIntent.EXTRA_PROMPT, "Tell Jarvis what to do")
-                try { voice.launch(intent) } catch (e: ActivityNotFoundException) {
-                    android.widget.Toast.makeText(context, "No voice input app on this phone", android.widget.Toast.LENGTH_SHORT).show()
-                }
-            }, enabled = !vm.busy) { Icon(MicIcon, "Speak") }
+            val listening = vm.voiceState == "listening"
+            IconButton(onClick = { if (listening) vm.stopVoice() else startListening() }, enabled = !vm.busy || listening) {
+                Icon(MicIcon, if (listening) "Stop listening" else "Speak",
+                    tint = if (listening) MaterialTheme.colorScheme.error else LocalContentColor.current)
+            }
+            IconButton(onClick = { if (vm.toggleHandsFree() && vm.voiceState == "idle" && !vm.busy) startListening() }) {
+                Icon(HeadsetIcon, if (vm.handsFree) "Turn off hands-free" else "Hands-free conversation",
+                    tint = if (vm.handsFree) MaterialTheme.colorScheme.primary else LocalContentColor.current)
+            }
             IconButton(onClick = { vm.send(input); input = "" }, enabled = input.isNotBlank() && !vm.busy) {
                 Icon(Icons.AutoMirrored.Filled.Send, "Send", tint = if (input.isNotBlank()) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
+    }
+}
+
+@Composable
+fun VoiceBar(vm: JarvisViewModel) {
+    val c = MaterialTheme.colorScheme
+    val text = when (vm.voiceState) {
+        "listening" -> if (vm.heard.isNotEmpty()) vm.heard else "Listening..."
+        "thinking" -> "Thinking..."
+        "speaking" -> "Speaking..."
+        "waiting" -> "Waiting for your tap on the question above"
+        else -> vm.heard.ifEmpty { "Hands-free is on. Tap the mic to talk; after each answer I'll listen again." }
+    }
+    Row(
+        Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp)
+            .background(c.secondaryContainer, RoundedCornerShape(12.dp)).padding(horizontal = 12.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (vm.voiceState in listOf("listening", "thinking", "speaking")) {
+            CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp, color = c.primary)
+            Spacer(Modifier.width(10.dp))
+        }
+        Text(text, fontSize = 13.sp, color = c.onSecondaryContainer, modifier = Modifier.weight(1f), maxLines = 3)
+        TextButton({ if (vm.handsFree) vm.toggleHandsFree(); vm.stopVoice() }) { Text("Stop") }
     }
 }
 
@@ -535,6 +579,15 @@ val MicIcon: ImageVector = ImageVector.Builder("Mic", 24.dp, 24.dp, 24f, 24f).ap
         moveTo(17.3f, 11f); curveTo(17.3f, 14f, 14.76f, 16.1f, 12f, 16.1f); curveTo(9.24f, 16.1f, 6.7f, 14f, 6.7f, 11f)
         horizontalLineTo(5f); curveTo(5f, 14.41f, 7.72f, 17.23f, 11f, 17.72f); verticalLineTo(21f); horizontalLineTo(13f)
         verticalLineTo(17.72f); curveTo(16.28f, 17.24f, 19f, 14.42f, 19f, 11f); horizontalLineTo(17.3f); close()
+    }
+}.build()
+
+val HeadsetIcon: ImageVector = ImageVector.Builder("Headset", 24.dp, 24.dp, 24f, 24f).apply {
+    path(fill = SolidColor(Color.Black)) {
+        moveTo(12f, 3f); curveTo(7.03f, 3f, 3f, 7.03f, 3f, 12f); verticalLineTo(19f); curveTo(3f, 20.1f, 3.9f, 21f, 5f, 21f)
+        horizontalLineTo(8f); verticalLineTo(13f); horizontalLineTo(5f); verticalLineTo(12f); curveTo(5f, 8.13f, 8.13f, 5f, 12f, 5f)
+        reflectiveCurveTo(19f, 8.13f, 19f, 12f); verticalLineTo(13f); horizontalLineTo(16f); verticalLineTo(21f); horizontalLineTo(19f)
+        curveTo(20.1f, 21f, 21f, 20.1f, 21f, 19f); verticalLineTo(12f); curveTo(21f, 7.03f, 16.97f, 3f, 12f, 3f); close()
     }
 }.build()
 
