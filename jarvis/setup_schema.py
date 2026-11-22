@@ -253,7 +253,7 @@ SERVICES: list[Service] = [
                           help="Only if you set API_KEY on the Speaches container"),
                     Field("enabled", "Enabled", "bool", default=True)]),
     Service("email", "Email accounts", "Email", ("email",), multi=True, test=_t_email,
-            help="Jarvis reads new mail read-only (never marks, moves, deletes or sends) and your LOCAL AI sorts it. "
+            help="Jarvis reads new mail read-only (never marks, moves or deletes) and your LOCAL AI sorts it. It never sends unless you turn on Allow sending, and then only after you approve each email. "
                  "Gmail, iCloud, Yahoo, Fastmail, Zoho, AOL: create an app password in the account's security settings and paste it "
                  "(Gmail: myaccount.google.com/apppasswords, needs 2-Step Verification). Proton: install Proton Mail Bridge on a "
                  "computer or in Docker, use the address/username and password Bridge shows, server = the Bridge machine, port 1143, "
@@ -274,6 +274,10 @@ SERVICES: list[Service] = [
                           help="From your free app registration at entra.microsoft.com (README: Outlook)"),
                     Field("interval_minutes", "Check every (minutes)", "int", default=15),
                     Field("notify_important", "Tell me about important mail", "bool", default=True),
+                    Field("allow_sending", "Allow Jarvis to send (after your approval)", "bool", default=False,
+                          help="For 'reply to Priya: ...' and 'email Raj saying ...'. You see the exact email and approve each one, in every mode. Outlook: sign in with Microsoft again after turning this on"),
+                    Field("smtp_host", "Outgoing server (SMTP)", help="Blank = the provider's usual one. Proton: the Bridge machine"),
+                    Field("smtp_port", "Outgoing port", "int", help="Blank = 587 (Proton Bridge 1025)"),
                     Field("enabled", "Enabled", "bool", default=True)]),
     Service("documents", "Documents & receipts", "AI & automation", ("documents",), test=_t_documents,
             help="Ask questions about your own documents (PDF, Word, text, Markdown, HTML) and receipt photos. Everything is read by "

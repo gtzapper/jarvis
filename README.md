@@ -338,13 +338,28 @@ What you get:
 ## Email screening
 Jarvis checks your inboxes every 15 minutes, and your **local AI** sorts each new message: important, personal, bill, newsletter, promotion, notification or spam. It also writes a one-line summary and picks out bills (payee, amount, due date).
 
-- **Read-only.** The mailbox is opened read-only and messages are read without marking them read. Nothing is moved, deleted, flagged or sent.
+- **Read-only.** The mailbox is opened read-only and messages are read without marking them read. Nothing is moved, deleted or flagged. Nothing is sent unless you switch sending on (see *Writing emails* below).
 - **Local AI only.** Only your Ollama model reads email, even if Claude is your main AI brain. With no local model, simple rules sort mail (no summaries). Setup → Email screening AI picks the model; blank uses the AI brain's Ollama settings. `gpt-oss:20b` does it well.
 - **Nothing kept but the summary.** Jarvis stores sender, subject, date, category and summary, never the message itself.
 - **Email can't give orders.** It's treated as untrusted text: the screening model has no tools and must answer in a fixed format. A message that says "ignore your instructions" just gets filed (in testing, as spam).
 - **Bills go in only with your OK.** Found bills appear in Planner → Email with a due date you can change, **Add** and **×**. Or say `add bill from email 12`.
 - **Important mail** is announced through your reminder channels (Setup → Reminders & daily report). The daily report has an email section.
 - **Chat:** `check my email`, `important emails`. With the AI on, also "anything from the bank this week?"
+
+**Packages.** Order, shipping and delivery emails become a package list (Planner → Email, or `packages` / `where's my package`). You hear when something is **out for delivery**, **delivered** or **delayed**, and the daily report says what's arriving today. An older email never moves a package backwards.
+
+**Subscription audit.** Receipts and renewal notices build a list of what you pay for: `subscriptions` shows each one with its amount, cycle and renewal date, plus a monthly and yearly total per currency.
+- **Price rises** are announced ("Netflix is going up from 499 to 649 INR").
+- **Yearly renewals** get a heads-up a week before.
+- Jarvis can't see whether you actually use a service. Cancel on the service's own site, then press **Cancelled** (or say `cancelled Netflix`) to drop it from the list.
+
+**Writing emails (off until you turn it on).** Setup → Email accounts → **Allow Jarvis to send** for one account. Then:
+- `reply to Priya: yes, 8pm works` or `email raj@example.com saying I'll be late`. With the AI on, just say what you mean ("tell Priya yes to dinner and ask if I should bring dessert") and it writes the email.
+- Names are looked up from mail you've received. A message to someone who wrote recently goes into their thread, with the subject `Re: ...`.
+- **You always see the exact email (from, to, subject, text) and approve it with a tap, in every mode, Auto included.** Read-only mode blocks sending.
+- The approval card warns you when the email answers spam or a first-time sender. Emails sometimes try to trick assistants into sending things.
+- Every sent email is written to the audit log.
+- Outgoing servers are filled in for the usual providers. Proton: the Bridge machine, port 1025. Outlook: add the `SMTP.Send` permission (step 3 below) and click **Sign in with Microsoft** again after turning sending on.
 
 **Adding accounts** (Setup → Email accounts, add as many as you like):
 
@@ -361,7 +376,7 @@ Jarvis checks your inboxes every 15 minutes, and your **local AI** sorts each ne
 **Outlook, one-time setup (about 5 minutes):**
 1. Go to entra.microsoft.com (or portal.azure.com) → App registrations → **New registration**. Name it "Jarvis mail". Supported account types: *Accounts in any organizational directory and personal Microsoft accounts*. No redirect URI. Register.
 2. **Authentication** → Advanced settings → *Allow public client flows* → **Yes** → Save.
-3. **API permissions** → Add a permission → *APIs my organization uses* → **Office 365 Exchange Online** → Delegated → `IMAP.AccessAsUser.All` → Add. (Work accounts may need an admin to grant consent, and IMAP must be allowed for the mailbox.)
+3. **API permissions** → Add a permission → *APIs my organization uses* → **Office 365 Exchange Online** → Delegated → `IMAP.AccessAsUser.All` (and `SMTP.Send` if you want Jarvis to send) → Add. (Work accounts may need an admin to grant consent, and IMAP must be allowed for the mailbox.)
 4. Copy the **Application (client) ID**. In Jarvis: Setup → Email accounts → provider **outlook** → your address and that client ID → Save.
 5. Click **Sign in with Microsoft**. Jarvis shows a code; open microsoft.com/devicelogin, enter it and approve. Jarvis keeps only the sign-in token (in `.env`) and renews it by itself.
 

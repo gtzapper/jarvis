@@ -145,10 +145,15 @@ class State:
                 except Exception as e:
                     print(f"email {entry['name']}: {e}")
                     continue
-                if not entry.get("notify_important", True):
-                    continue
                 p = self.planner_cfg()
                 notifier = Notifier(cfg)
+                for r in new:
+                    for title, text in r.get("events") or []:
+                        organizer.record("mail", title, text)
+                        if p["ntfy"]:
+                            notifier.send(title, text)
+                if not entry.get("notify_important", True):
+                    continue
                 for r in new:
                     who = parseaddr(r["sender"])
                     who = who[0] or who[1]
@@ -173,7 +178,9 @@ class State:
                 with self.lock:
                     notifier = Notifier(self.cfg)
                 from .. import life
-                for kind, title, text in organizer.due_now() + life.habit_checkins():
+                from .. import mail as _mail
+                renewals = [("mail", t, x) for t, x in _mail.renewal_notices()] if self.cfg.get("email") else []
+                for kind, title, text in organizer.due_now() + life.habit_checkins() + renewals:
                     if p["ntfy"]:
                         notifier.send(title, text)
                 sec = (self.cfg.get("security_watch") or {})
@@ -493,7 +500,7 @@ def create_app(state: State, password: str | None) -> Flask:
         if job.status == "input":
             if not getattr(job, "notified", False):
                 job.notified = True
-                q = (job.prompt or {}).get("question", "").replace("[destructive] ", "").split("\n")[0]
+                q = (job.prompt or {}).get("question", "").replace("[destructive] ", "").replace("[sends] ", "").split("\n")[0]
                 with state.lock:
                     Notifier(state.cfg).send("Jarvis needs your OK", f"{job.origin}: {q or job.text}. Open Jarvis to answer.")
             text = "That needs your OK. I've put the question on your phone and the dashboard."
@@ -680,10 +687,24 @@ def create_app(state: State, password: str | None) -> Flask:
         from .. import mail
         hours = max(1, min(int(request.args.get("hours", 72)), 24 * 30))
         with state.lock:
-            accounts = [{"name": e.get("name"), "address": e.get("address"), "provider": e.get("provider"), "enabled": e.get("enabled", True)}
+            accounts = [{"name": e.get("name"), "address": e.get("address"), "provider": e.get("provider"), "enabled": e.get("enabled", True),
+                         "sending": bool(e.get("allow_sending"))}
                         for e in state.cfg.get("email") or []]
             model = mail.local_model(state.cfg)
-        return jsonify(messages=mail.recent(hours), accounts=accounts, states=mail.states(), local_model=model[1] if model else None)
+        return jsonify(messages=mail.recent(hours), accounts=accounts, states=mail.states(), local_model=model[1] if model else None,
+                       packages=mail.packages(), subscriptions=mail.subscriptions())
+
+    @app.post("/api/mail/package/<int:pid>/dismiss")
+    def mail_package_dismiss(pid):
+        from .. import mail
+        mail.dismiss_package(pid)
+        return jsonify(ok=True)
+
+    @app.post("/api/mail/subscription/<int:sid>/cancelled")
+    def mail_subscription_cancelled(sid):
+        from .. import mail
+        mail.set_subscription(sid, bool((request.get_json(silent=True) or {}).get("cancelled", True)))
+        return jsonify(ok=True)
 
     @app.post("/api/mail/check")
     def mail_check_now():
@@ -727,7 +748,7 @@ def create_app(state: State, password: str | None) -> Flask:
         if not entry.get("client_id"):
             return jsonify(ok=False, error="Enter your Microsoft app (client) ID and save first (README: Outlook)")
         try:
-            dev = mail.ms_device_start(entry["client_id"])
+            dev = mail.ms_device_start(entry["client_id"], bool(entry.get("allow_sending")))
         except mail.MailError as e:
             return jsonify(ok=False, error=str(e))
         flow_id = uuid.uuid4().hex[:10]

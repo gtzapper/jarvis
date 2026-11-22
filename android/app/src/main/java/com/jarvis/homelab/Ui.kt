@@ -336,6 +336,7 @@ fun PromptCard(p: Prompt, onAnswer: (Any?) -> Unit) {
     Column(Modifier.padding(top = 8.dp)) {
         if (p.type == "confirm") {
             if (p.destructive) Text("Destructive, so I always ask:", color = c.error, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+            if (p.sends) Text("This sends in your name, so I always ask:", color = c.tertiary, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
             Text(p.question, fontSize = 15.sp, lineHeight = 21.sp, color = c.onSurface)
             var code by remember(p.question) { mutableStateOf("") }
             if (p.code) {
@@ -689,6 +690,29 @@ private fun androidx.compose.foundation.lazy.LazyListScope.mailItems(vm: JarvisV
             }
         }
     }
+    val pk = d.optJSONArray("packages")
+    val packages = (0 until (pk?.length() ?: 0)).map { pk!!.getJSONObject(it) }
+    if (packages.isNotEmpty()) {
+        item { Text("PACKAGES", fontSize = 12.sp, letterSpacing = 0.5.sp, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(top = 8.dp)) }
+        items(packages) { p -> PackageRow(p) { TextButton({ vm.plannerAction("/api/mail/package/${p.optInt("id")}/dismiss") }) { Text("Hide") } } }
+    }
+    val sb = d.optJSONArray("subscriptions")
+    val subs = (0 until (sb?.length() ?: 0)).map { sb!!.getJSONObject(it) }
+    if (subs.isNotEmpty()) {
+        val totals = mutableMapOf<String, Double>()
+        subs.filter { !it.isNull("amount") }.forEach { s ->
+            val perMonth = s.optDouble("amount") * when (s.optString("cycle")) { "yearly" -> 1.0 / 12; "weekly" -> 52.0 / 12; else -> 1.0 }
+            val cur = s.optString("currency").takeIf { it != "null" } ?: ""
+            totals[cur] = (totals[cur] ?: 0.0) + perMonth
+        }
+        item { Text("SUBSCRIPTIONS" + if (totals.isNotEmpty()) " · about " + totals.entries.joinToString(" + ") { "${it.key} ${Math.round(it.value)}/month".trim() } else "",
+            fontSize = 12.sp, letterSpacing = 0.5.sp, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(top = 8.dp)) }
+        items(subs) { s -> SubscriptionRow(s) { TextButton({ vm.plannerAction("/api/mail/subscription/${s.optInt("id")}/cancelled") }) { Text("Cancelled") } } }
+        item { Text("Found in your email. Jarvis can't see whether you use them: cancel on the service's site, then tap Cancelled.",
+            fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+    }
     val rest = all.filter { it.optInt("important") != 1 && it.isNull("bill") }.groupingBy { it.optString("category") }.eachCount()
     if (rest.isNotEmpty()) item {
         Text("Everything else: " + rest.entries.sortedByDescending { it.value }.joinToString(", ") { "${it.value} ${it.key}" },
@@ -717,6 +741,45 @@ fun MailRow(m: JSONObject, color: Color, actions: @Composable () -> Unit) {
         }
         actions()
     }
+}
+
+private fun JSONObject.str(key: String) = if (isNull(key)) "" else optString(key)
+
+@Composable
+private fun InfoRow(title: String, detail: String, color: Color, actions: @Composable () -> Unit) {
+    val c = MaterialTheme.colorScheme
+    Row(Modifier.fillMaxWidth().background(c.surface, RoundedCornerShape(12.dp)).border(1.dp, c.outline, RoundedCornerShape(12.dp))
+        .padding(horizontal = 12.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+        Box(Modifier.size(10.dp).background(color, CircleShape))
+        Spacer(Modifier.width(10.dp))
+        Column(Modifier.weight(1f)) {
+            Text(title, fontSize = 15.sp)
+            if (detail.isNotEmpty()) Text(detail, fontSize = 12.sp, color = c.onSurfaceVariant, maxLines = 2)
+        }
+        actions()
+    }
+}
+
+@Composable
+fun PackageRow(p: JSONObject, actions: @Composable () -> Unit) {
+    val c = MaterialTheme.colorScheme
+    val status = p.str("status")
+    val label = mapOf("ordered" to "Ordered", "shipped" to "Shipped", "out_for_delivery" to "Out for delivery",
+        "delivered" to "Delivered", "delayed" to "Delayed").getOrDefault(status, "Update")
+    val detail = listOf(p.str("sender"), if (p.str("expected").isNotEmpty() && status != "delivered") "expected ${p.str("expected")}" else "",
+        listOf(p.str("carrier"), p.str("tracking")).filter { it.isNotEmpty() }.joinToString(" ")).filter { it.isNotEmpty() }.joinToString(" · ")
+    InfoRow("${p.str("item").ifEmpty { "Package" }} · $label", detail,
+        when (status) { "delivered" -> c.primary; "delayed" -> c.error; else -> c.tertiary }, actions)
+}
+
+@Composable
+fun SubscriptionRow(s: JSONObject, actions: @Composable () -> Unit) {
+    val amount = if (s.isNull("amount")) null else s.optDouble("amount")
+    val money = amount?.let { a -> " · ${s.str("currency")} ${if (a % 1.0 == 0.0) "%,.0f".format(a) else "%,.2f".format(a)} ${s.str("cycle")}" } ?: " · ${s.str("cycle")}"
+    val prev = if (s.isNull("previous_amount")) null else s.optDouble("previous_amount")
+    val rise = if (prev != null && amount != null && amount > prev) "  ▲ was ${"%,.0f".format(prev)}" else ""
+    InfoRow(s.str("service") + money + rise, s.str("renews").let { if (it.isEmpty()) "renewal date unknown" else "renews $it" },
+        MaterialTheme.colorScheme.tertiary, actions)
 }
 
 private fun dayLabel(iso: String): String {

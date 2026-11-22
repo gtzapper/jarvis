@@ -23,7 +23,7 @@ import org.json.JSONObject
 import java.util.Locale
 
 /** A question Jarvis is waiting on: yes/no, or pick one of several. */
-data class Prompt(val type: String, val question: String, val options: List<String>, val destructive: Boolean, val code: Boolean = false)
+data class Prompt(val type: String, val question: String, val options: List<String>, val destructive: Boolean, val code: Boolean = false, val sends: Boolean = false)
 
 data class ChatMsg(
     val fromYou: Boolean,
@@ -421,7 +421,8 @@ class JarvisViewModel(app: Application) : AndroidViewModel(app) {
             val opts = p.optJSONArray("options")
             Prompt(
                 type = p.optString("type"),
-                question = q.removePrefix("[destructive] "),
+                question = q.removePrefix("[destructive] ").removePrefix("[sends] "),
+                sends = q.startsWith("[sends] "),
                 options = if (opts != null) List(opts.length()) { opts.getString(it) } else emptyList(),
                 destructive = q.startsWith("[destructive] "),
                 code = p.optBoolean("code"),

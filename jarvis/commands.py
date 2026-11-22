@@ -39,6 +39,8 @@ HELP = """Things I understand:
   mark rent paid                 moves a repeating bill to its next due date
   daily report                   the morning briefing, any time
   check my email / important emails   what your local AI found in new mail (add bill from email 12)
+  packages / subscriptions           deliveries and what you pay for, found in your email
+  reply to priya: yes, 8pm works     writes an email; you see it and approve it first (sending is off until Setup)
   add milk and eggs to the shopping list / shopping list / got milk / clear done items
   remember that my car needs an oil change every 10,000 km / what do you remember / forget oil
   add habit take meds at 21:00 / done meds / habits
@@ -159,6 +161,11 @@ class Assistant:
             (r"^(mark |i paid |paid )(the )?(?P<name>.+?)( bill)?( as)?( paid)?$", self.mark_paid),
             (r"^(check (my )?(e-?mails?|inbox|mail)|(my )?(e-?mails?|inbox|mail)( summary)?|any (new |important )?(e-?mails?|mail)|important (e-?mails?|mail))$", self.email_summary),
             (r"^add (the )?bill from (e-?mail|mail) (?P<n>\d+)$", self.email_bill),
+            (r"^(((any|my) )?(packages?|parcels?|deliveries|orders)( coming)?|where'?s my (package|parcel|order|delivery)|what'?s (arriving|being delivered)( today)?)$", self.packages_cmd),
+            (r"^(subscriptions|my subscriptions|subscription audit|audit (my )?subscriptions|what am i (subscribed to|paying for))$", self.subscriptions_cmd),
+            (r"^(i )?(cancell?ed|unsubscribed from) (my )?(?P<name>.+?)( subscription)?$", self.cancelled_cmd),
+            (r"^reply to (e-?mail |mail )?(?P<who>.+?)\s*(:|saying|that)\s*(?P<body>.+)$", self.reply_cmd),
+            (r"^(e-?mail|send an e-?mail to|write to) (?P<who>\S+@\S+|[\w .'-]+?)\s*(:|saying|that|to say)\s*(?P<body>.+)$", self.email_cmd),
             (r"^(add|new|track) habit (?P<rest>.+)$", self.habit_add_cmd),
             (r"^(add|put) (?P<items>.+?) (to|on) (my |the )?(?P<name>[\w -]+?)( list)?$", self.list_add),
             (r"^(show |what'?s on |read )?(my |the )?(?P<name>shopping|grocery|groceries|todo|to-do|to do|[\w-]+) list$", self.show_list),
@@ -237,13 +244,16 @@ class Assistant:
         level: 'read'        only looks (run_command with df, docker ps...): asks only in Ask mode
                'safe'        harmless change (pause, refresh Plex): never asks, blocked in Read-only
                'change'      everyday change: asks in Ask mode, just happens in Auto
-               'destructive' deletes, reboots, stops things: always asks, whatever the mode"""
+               'destructive' deletes, reboots, stops things: always asks, whatever the mode
+               'outward'     sends something in your name (an email): always asks, whatever the mode"""
         from .audit import audit
         mode = self.mode
         if mode == "read-only" and level != "read":
             what = doing or question.splitlines()[0].split("?")[0]
             audit(f"BLOCKED (read-only mode): {what}")
             raise Blocked(f"Read-only mode is on, so this was blocked: {what}. Say 'auto mode' or 'ask mode' to let me make changes.")
+        if level == "outward":
+            return self._asked(self.confirm("[sends] " + question))
         if level == "destructive":
             from . import totp
             if totp.enabled(self.cfg):
@@ -918,6 +928,83 @@ class Assistant:
         if counts:
             out.append("Everything else: " + ", ".join(f"{n} {c}" for c, n in sorted(counts.items(), key=lambda x: -x[1])) + ".")
         return "\n".join(out)
+
+    def packages_cmd(self, m) -> str:
+        from . import mail
+        return mail.describe_packages()
+
+    def subscriptions_cmd(self, m) -> str:
+        from . import mail
+        return mail.subscription_audit()
+
+    def cancelled_cmd(self, m) -> str:
+        from . import mail
+        q = m["name"].lower().strip()
+        for s in mail.subscriptions():
+            if q in s["service"].lower() or s["service"].lower() in q:
+                mail.set_subscription(s["id"], True)
+                return f"Marked {s['service']} as cancelled. I'll leave it out of the audit."
+        return f"I don't have a subscription called {m['name']}. Say 'subscriptions' to see the list."
+
+    def send_email(self, to: str, subject: str, body: str, mail_id: int | None = None) -> str:
+        """Send an email in the user's name. Always shows the exact email and asks, in every mode."""
+        from email.utils import parseaddr
+        from . import mail
+        in_reply_to = None
+        body, subject, to = mail._plain_text(body or ""), mail._plain_text(subject or ""), (to or "").strip()
+        if re.match(r"(hi|hello|hey|dear)\b", subject, re.I):
+            subject = ""  # a greeting isn't a subject
+        if not mail_id and to and "@" not in to and not subject:
+            # writing to someone who emailed recently with no new subject: answer in their thread
+            recent = [r for r in mail.recent(24 * 14) if to.lower() in parseaddr(r["sender"])[0].lower()]
+            if recent:
+                mail_id = recent[0]["id"]
+        orig = None
+        if mail_id:
+            orig = mail.mail_row(int(mail_id))
+            if not orig:
+                return f"I can't find email {mail_id}."
+            to = to or orig.get("reply_to") or parseaddr(orig["sender"])[1]
+            in_reply_to = orig.get("message_id")
+            if not subject:
+                subject = orig["subject"] if orig["subject"].lower().startswith("re:") else "Re: " + orig["subject"]
+        address = mail.find_contact(to or "")
+        if not address:
+            return f"I don't have an email address for {to}. Give me the address, e.g. 'email name@example.com saying ...'."
+        try:
+            frm = mail.sending_account(self.cfg)["address"]
+        except mail.MailError as e:
+            return str(e) + "."
+        body = body.strip()
+        subject = (subject or body.split("\n")[0][:60]).strip()
+        warn = ""
+        if orig and orig["category"] in ("spam", "promotion"):
+            warn = f"\nCareful: this answers a message the screening marked as {orig['category']}. Emails can try to trick me into sending things."
+        elif mail.times_heard_from(address) <= 1:
+            warn = "\nCareful: you've had no other email from this address. Emails can try to trick me into sending things."
+        preview = f"Send this email?{warn}\nFrom: {frm}\nTo: {address}\nSubject: {subject}\n\n{body}"
+        if not self.allow(preview, "outward", doing=f"Email to {address}"):
+            return "Not sent."
+        from .audit import audit
+        try:
+            sent_from = mail.send(self.cfg, address, subject, body, in_reply_to=in_reply_to)
+        except mail.MailError as e:
+            return str(e)
+        audit(f"EMAIL SENT from {sent_from} to {address}: {subject}")
+        return f"Sent to {address}."
+
+    def reply_cmd(self, m) -> str:
+        from . import mail
+        who = m["who"].strip()
+        if who.isdigit():
+            return self.send_email("", "", m.m["body"], mail_id=int(who))
+        rows = [r for r in mail.recent(24 * 30) if who.lower() in r["sender"].lower()]
+        if not rows:
+            return f"I can't find a recent email from {who} to reply to."
+        return self.send_email("", "", m.m["body"], mail_id=rows[0]["id"])
+
+    def email_cmd(self, m) -> str:
+        return self.send_email(m.m["who"].strip(), "", m.m["body"])
 
     def email_bill(self, m) -> str:
         from . import mail

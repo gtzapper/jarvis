@@ -440,6 +440,7 @@ function follow(job, b, viaVoice = false) {
       if (viaVoice && !b.dataset.asked) { b.dataset.asked = "1"; voice.waitForTap(job.prompt.type === "confirm" ? "I need your OK on the screen." : "Pick one on the screen."); }
       if (job.prompt.type === "confirm") {
         const risky = job.prompt.question.startsWith("[destructive] ");
+        const sends = job.prompt.question.startsWith("[sends] ");
         const codeBox = job.prompt.code ? el("input", { type: "text", inputmode: "numeric", autocomplete: "one-time-code", maxlength: "6", placeholder: "6-digit code", style: "width:130px" }) : null;
         const yes = async () => {
           if (codeBox && !/^\d{6}$/.test(codeBox.value.trim())) { codeBox.focus(); return; }
@@ -447,7 +448,8 @@ function follow(job, b, viaVoice = false) {
           job = await api(`/api/chat/${job.id}/answer`, codeBox ? { answer: true, code: codeBox.value.trim() } : { answer: true }); render(); poll();
         };
         if (codeBox) codeBox.onkeydown = e => { if (e.key === "Enter") yes(); };
-        parts.push(risky ? el("div", { class: "warn" }, "Destructive, so I always ask:") : null, el("div", {}, job.prompt.question.replace(/^\[destructive\] /, "")),
+        parts.push(risky ? el("div", { class: "warn" }, "Destructive, so I always ask:") : sends ? el("div", { class: "warn" }, "This sends in your name, so I always ask:") : null,
+          el("div", { style: "white-space:pre-wrap" }, job.prompt.question.replace(/^\[(destructive|sends)\] /, "")),
           codeBox ? el("div", { class: "help", style: "margin-top:6px" }, "Two-factor approval: enter the code from your authenticator app.") : null,
           el("div", { class: "row", style: "margin-top:10px" }, codeBox, el("button", { class: "btn primary", onclick: yes }, "Yes, do it"), el("button", { class: "btn", onclick: () => answer(false) }, "No")));
       } else {
@@ -1109,7 +1111,7 @@ async function loadMail() {
   const card = $("#mailcard");
   const d = await api("/api/mail?hours=72");
   if (!d.accounts.length) {
-    put(card, el("strong", {}, "Email"), el("p", { class: "help", style: "margin:4px 0 8px" }, "Connect Gmail, Outlook, Proton or another account and your local AI sorts new mail, flags what matters and spots bills. Read-only: nothing is marked, moved or sent."),
+    put(card, el("strong", {}, "Email"), el("p", { class: "help", style: "margin:4px 0 8px" }, "Connect Gmail, Outlook, Proton or another account and your local AI sorts new mail, flags what matters and spots bills. Read-only: nothing is marked, moved or sent (sending is a separate switch, and every email needs your OK)."),
       el("button", { class: "btn", onclick: () => { show("setup"); setTimeout(() => openService("email"), 400); } }, "Connect an email account"));
     return;
   }
@@ -1129,11 +1131,32 @@ async function loadMail() {
       el("div", { class: "acts" }, due, el("button", { class: "btn", onclick: () => planPost(`/api/mail/${m.id}/bill`, { due: due.value }) }, "Add"),
         el("button", { class: "btn", title: "Not a bill to track", onclick: () => planPost(`/api/mail/${m.id}/dismiss`) }, "×")));
   };
+  const canSend = d.accounts.some(a => a.sending);
+  const replyBtn = m => canSend ? el("button", { class: "btn", title: "Write a reply (you approve it before it's sent)", onclick: () => {
+    show("chat"); const i = $("#input"); i.value = `reply to ${m.id}: `; i.focus(); } }, "Reply") : null;
+  const stLabel = { ordered: "Ordered", shipped: "Shipped", out_for_delivery: "Out for delivery", delivered: "Delivered", delayed: "Delayed", other: "Update" };
+  const pkgs = d.packages || [], subs = d.subscriptions || [];
+  const pkgRow = p => el("div", { class: "item" }, el("span", { class: "dot " + (p.status === "delivered" ? "k-event" : p.status === "delayed" ? "k-overdue" : "k-bill") }),
+    el("div", { class: "grow" }, el("div", {}, `${p.item || "Package"} · ${stLabel[p.status] || p.status}`),
+      el("div", { class: "when" }, [p.sender, p.expected && p.status !== "delivered" ? `expected ${p.expected}` : "", [p.carrier, p.tracking].filter(Boolean).join(" ")].filter(Boolean).join(" · "))),
+    el("div", { class: "acts" }, el("button", { class: "btn", title: "Hide this package", onclick: () => planPost(`/api/mail/package/${p.id}/dismiss`) }, "×")));
+  const perMonth = s => s.amount ? s.amount * ({ monthly: 1, yearly: 1 / 12, weekly: 52 / 12 }[s.cycle] || 1) : 0;
+  const totals = {};
+  subs.forEach(s => { if (s.amount) totals[s.currency || ""] = (totals[s.currency || ""] || 0) + perMonth(s); });
+  const subRow = s => el("div", { class: "item" }, el("span", { class: "dot k-bill" }),
+    el("div", { class: "grow" }, el("div", {}, `${s.service}${s.amount ? ` · ${s.currency || ""} ${Number(s.amount).toFixed(s.amount % 1 ? 2 : 0)} ${s.cycle}` : ` · ${s.cycle}`}`
+        + (s.previous_amount && s.amount > s.previous_amount ? `  ▲ was ${s.previous_amount}` : "")),
+      el("div", { class: "when" }, s.renews ? `renews ${s.renews}` : "renewal date unknown")),
+    el("div", { class: "acts" }, el("button", { class: "btn", title: "I cancelled it: leave it out", onclick: () => planPost(`/api/mail/subscription/${s.id}/cancelled`, { cancelled: true }) }, "Cancelled")));
   put(card, el("div", { class: "row", style: "justify-content:space-between" }, el("strong", {}, "Email (last 3 days)"), check),
     el("p", { class: "help", style: "margin:4px 0 6px" }, d.local_model ? `Sorted by your local model ${d.local_model}.` : "No local AI set, so simple rules sort mail (no summaries). Setup > Email screening AI."),
     errs.length ? el("p", { class: "result bad" }, errs.map(e => `${e.account}: ${e.error}`).join(" · ")) : null,
     imp.length ? [el("div", { class: "day-head" }, `Important (${imp.length})`), imp.slice(0, 15).map(m => el("div", { class: "item" }, el("span", { class: "dot k-overdue" }),
-      el("div", { class: "grow" }, el("div", {}, m.summary), el("div", { class: "when" }, `${who(m.sender)} · ${m.subject} · ${m.received.replace("T", " ")}`))))] : null,
+      el("div", { class: "grow" }, el("div", {}, m.summary), el("div", { class: "when" }, `${who(m.sender)} · ${m.subject} · ${m.received.replace("T", " ")}`)),
+      replyBtn(m) ? el("div", { class: "acts" }, replyBtn(m)) : null))] : null,
+    pkgs.length ? [el("div", { class: "day-head" }, `Packages (${pkgs.length})`), pkgs.map(pkgRow)] : null,
+    subs.length ? [el("div", { class: "day-head" }, `Subscriptions (${subs.length})` + (Object.keys(totals).length ? " · about " + Object.entries(totals).map(([c, v]) => `${c} ${Math.round(v)}/month`.trim()).join(" + ") : "")),
+      subs.map(subRow), el("p", { class: "help" }, "Found in your email. Jarvis can't see whether you use them; cancel on the service's site, then press Cancelled.")] : null,
     bills.length ? [el("div", { class: "day-head" }, `Bills found (${bills.length})`), bills.slice(0, 15).map(billRow)] : null,
     Object.keys(counts).length ? el("p", { class: "help", style: "margin-top:10px" }, "Everything else: " + Object.entries(counts).sort((a, b) => b[1] - a[1]).map(([c, n]) => `${n} ${c}`).join(", ")) : null,
     !d.messages.length ? el("p", { class: "help" }, "No new mail screened yet. It checks every 15 minutes, or press Check now.") : null);
