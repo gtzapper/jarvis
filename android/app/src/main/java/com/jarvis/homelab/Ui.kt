@@ -55,6 +55,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Button
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -465,8 +466,9 @@ fun PlannerScreen(vm: JarvisViewModel) {
         item { PhoneCalendarRow(vm) }
         item {
             SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
-                listOf("upcoming" to "Soon", "lists" to "Lists", "mail" to "Mail", "docs" to "Docs", "notes" to "Notes").forEachIndexed { i, (key, label) ->
-                    SegmentedButton(selected = section == key, onClick = { section = key }, shape = SegmentedButtonDefaults.itemShape(i, 5)) { Text(label, fontSize = 12.sp, maxLines = 1) }
+                listOf("upcoming" to "Soon", "lists" to "Lists", "mail" to "Mail", "media" to "Media", "docs" to "Docs", "notes" to "Notes").forEachIndexed { i, (key, label) ->
+                    SegmentedButton(selected = section == key, onClick = { section = key; if (key == "media") vm.loadMedia() }, shape = SegmentedButtonDefaults.itemShape(i, 6),
+                        icon = {}) { Text(label, fontSize = 11.sp, maxLines = 1) }
                 }
             }
         }
@@ -481,6 +483,8 @@ fun PlannerScreen(vm: JarvisViewModel) {
             listItems(vm)
         } else if (section == "mail") {
             mailItems(vm)
+        } else if (section == "media") {
+            mediaItems(vm)
         } else if (showNotes) {
             val notes = p.optJSONArray("notes")
             val n = notes?.length() ?: 0
@@ -649,6 +653,60 @@ private fun androidx.compose.foundation.lazy.LazyListScope.listItems(vm: JarvisV
             }
         }
     }
+}
+
+private fun androidx.compose.foundation.lazy.LazyListScope.mediaItems(vm: JarvisViewModel) {
+    item {
+        var kind by remember { mutableStateOf("movie") }
+        var title by remember { mutableStateOf("") }
+        var who by remember { mutableStateOf("") }
+        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text("ASK FOR A MOVIE OR SHOW", fontSize = 12.sp, letterSpacing = 0.5.sp, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                FilterChip(kind == "movie", { kind = "movie" }, { Text("Movie") })
+                FilterChip(kind == "show", { kind = "show" }, { Text("Show") })
+            }
+            OutlinedTextField(title, { title = it }, Modifier.fillMaxWidth(), singleLine = true, placeholder = { Text("Title") })
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                OutlinedTextField(who, { who = it }, Modifier.weight(1f), singleLine = true, placeholder = { Text("For (name)") })
+                Spacer(Modifier.width(8.dp))
+                Button({ if (title.isNotBlank()) { vm.requestMedia(kind, title.trim(), who.trim()); title = "" } }) { Text("Request") }
+            }
+            vm.mediaNote?.let { Text(it, fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+        }
+    }
+    val rq = vm.mediaRequests?.optJSONArray("requests")
+    val reqs = (0 until (rq?.length() ?: 0)).map { rq!!.getJSONObject(it) }
+    if (reqs.isNotEmpty()) {
+        item { Text("REQUESTS", fontSize = 12.sp, letterSpacing = 0.5.sp, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(top = 8.dp)) }
+        val label = mapOf("pending" to "waiting for you", "approved" to "approved, downloading", "declined" to "declined", "ready" to "ready to watch")
+        items(reqs) { r ->
+            val st = r.optString("status")
+            InfoRow("${r.optString("title")} (${r.str("year").ifEmpty { "?" }})", "${r.optString("kind")} · for ${r.optString("who")} · ${label[st] ?: st}",
+                when (st) { "pending" -> MaterialTheme.colorScheme.error; "ready" -> MaterialTheme.colorScheme.primary; else -> MaterialTheme.colorScheme.tertiary }) {
+                if (st == "pending") {
+                    TextButton({ vm.decideMedia(r.optInt("id"), true) }) { Text("Approve") }
+                    TextButton({ vm.decideMedia(r.optInt("id"), false) }) { Text("No") }
+                }
+            }
+        }
+    }
+    val w = vm.watch
+    item { Text("WATCH NEXT", fontSize = 12.sp, letterSpacing = 0.5.sp, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.padding(top = 8.dp)) }
+    if (w == null) { item { Text("Loading...") }; return }
+    if (!w.optBoolean("ok")) { item { Text(w.optString("error"), fontSize = 14.sp) }; return }
+    val cont = w.optJSONArray("continue"); val picks = w.optJSONArray("picks")
+    val all = (0 until (cont?.length() ?: 0)).map { cont!!.getJSONObject(it) to true } + (0 until (picks?.length() ?: 0)).map { picks!!.getJSONObject(it) to false }
+    items(all) { (p, isCont) ->
+        val genres = p.optJSONArray("genres")?.let { g -> (0 until g.length()).joinToString(", ") { g.getString(it) } } ?: ""
+        val mins = p.str("minutes").let { if (it.isEmpty()) "" else if (isCont) "$it min left" else "$it min" + if (p.optString("kind") == "show") " episodes" else "" }
+        val rating = if (p.isNull("rating") || !p.has("rating")) "" else "rated %.1f".format(p.optDouble("rating"))
+        InfoRow(p.optString("title"), listOf(if (isCont) p.str("why") else genres, mins, rating, if (isCont) "" else p.str("why")).filter { it.isNotEmpty() }.joinToString(" · "),
+            if (isCont) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.tertiary) {}
+    }
+    if (all.isEmpty()) item { Text("Nothing unwatched in your library right now.", fontSize = 14.sp) }
 }
 
 private fun androidx.compose.foundation.lazy.LazyListScope.mailItems(vm: JarvisViewModel) {

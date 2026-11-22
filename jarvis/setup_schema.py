@@ -191,6 +191,12 @@ SERVICES: list[Service] = [
             help="Settings > General > API Key", fields=[_url(9696), _key("PROWLARR_API_KEY")]),
     Service("overseerr", "Overseerr / Jellyseerr", "Media", ("media", "overseerr"), test=_t_media("OverseerrClient"),
             help="Settings > General > API Key", fields=[_url(5055), _key("OVERSEERR_API_KEY")]),
+    Service("media_cleanup", "Clean-up suggestions", "Media", ("media_cleanup",),
+            help="Media page > Clean up and 'free up space' suggest big movies and shows that could go. Needs Plex plus Radarr and/or "
+                 "Sonarr. Suggestions only: deleting always asks first.",
+            fields=[Field("watched_days", "Watched more than (days) ago", "int", default=180),
+                    Field("unwatched_days", "Never watched after (days)", "int", default=365),
+                    Field("min_gb", "Ignore anything smaller than (GB)", "int", default=1)]),
 
     Service("qbittorrent", "qBittorrent", "Downloads", ("media", "qbittorrent"), test=_t_media("QBittorrentClient"),
             help="Your Web UI login. Or whitelist Jarvis's IP in Web UI settings and leave the password blank.",

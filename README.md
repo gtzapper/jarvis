@@ -459,6 +459,25 @@ The test shows whether Ollama is reachable, whether the model is installed and w
 
 Switching between Claude and Ollama is just the Provider setting. Your API key stays saved either way.
 
+## Media: what to watch, family requests, freeing space
+The **Media** page (dashboard, and Planner → Media in the Android app):
+
+- **Watch next.** It starts with what you're part-way through, then unwatched movies and shows from your own Plex library.
+  - Picks are ranked by the genres you've watched lately (recent viewing counts more), by rating, and by how new they are.
+  - Filter by length ("≤ 1 hour") or genre.
+  - Chat: `what should I watch`. With the AI on, ask things like "something funny under 2 hours for tonight?". The AI only suggests titles that are in your library.
+- **Requests.** Anyone can ask for a movie or show: the Request box, `request the movie The Wild Robot for Asha`, or "my daughter wants The Wild Robot".
+  - Jarvis finds the title and puts it in a queue. You get a notice and **Approve** or **Decline** it (or say `requests`, then `approve 1`).
+  - Approving adds it to Radarr or Sonarr. When the file arrives, you're told it's ready to watch and who asked for it.
+  - Overseerr/Jellyseerr requests appear in the same `requests` list.
+- **Clean up.** **Find space to free** (or `free up space`) lists big movies and shows that could go, biggest first, with the total. It looks for:
+  - things watched more than 180 days ago;
+  - things never watched a year after they were added;
+  - ended shows you've finished.
+  - **Keep** stops a title being suggested. **Delete…** goes to Chat and **always asks first**, showing the size. It deletes the title in Radarr/Sonarr with its files, and adds an exclusion so it isn't downloaded again. Read-only mode blocks deleting.
+  - Change the limits in Setup → Clean-up suggestions.
+- *Watched* means watched on the Plex account whose token Jarvis uses (usually yours). Other family members' viewing isn't counted yet.
+
 ## Finding your media apps automatically
 Setup → **Find media apps automatically** → Scan (or say `find media apps` in the chat). Jarvis looks for Plex, Sonarr, Radarr, Lidarr, Prowlarr, Overseerr/Jellyseerr, qBittorrent, Deluge and SABnzbd in three places:
 

@@ -53,7 +53,10 @@ HELP = """Things I understand:
   search movie dune              look something up (also: show, artist)
   add movie dune                 add it and start searching (also: show, artist)
   search missing movies          ask Radarr/Sonarr/Lidarr to hunt for missing items
-  requests                       pending Overseerr requests, numbered
+  requests                       requests waiting for your OK (Jarvis and Overseerr), numbered
+  what should I watch            carry on watching, plus unwatched picks that suit your taste
+  clean up / free up space       big things watched long ago or never watched (delete movie X asks first; keep X)
+  request the movie Dune for Maya   queue a request for your OK; you hear when it's ready
   approve 2 / decline 2 / approve all
   refresh plex [library name]    scan libraries for new files
   indexers / test indexers       Prowlarr indexer health
@@ -196,7 +199,13 @@ class Assistant:
             (rf"^(search|hunt) (for )?missing (?P<kind>{KIND_WORDS})$", self.search_missing),
             (rf"^(search|find|look ?up) (for )?(the |a )?(?P<kind>{KIND_WORDS}) (?P<q>.+)$", self.search),
             (rf"^(add|download|get|grab) (the |a )?(?P<kind>{KIND_WORDS}) (?P<q>.+)$", self.add),
-            (r"^(requests|pending( requests)?|overseerr)$", self.requests),
+            (r"^(what should (i|we) watch|watch suggestions|suggest (something|a movie|a show|something to watch)|something to watch|movie night|what to watch)( tonight)?$", self.watch_cmd),
+            (r"^(continue watching|on deck|what was i watching)$", self.watch_cmd),
+            (r"^((media )?clean ?up( suggestions)?|free up (some )?(disk )?space|what can i delete|clean up (plex|media|the library))$", self.cleanup_cmd),
+            (rf"^(delete|remove) (the )?(?P<kind>movie|film|show|series) (?P<q>.+?)( from (the )?(library|plex|disk))?$", self.delete_media_cmd),
+            (r"^keep (?P<q>.+)$", self.keep_media_cmd),
+            (rf"^(request|ask for) (the )?(?P<kind>movie|film|show|series) (?P<q>.+?)( for (?P<who>[\w ]+))?$", self.request_media_cmd),
+            (r"^(requests|pending( requests)?|overseerr|media requests)$", self.requests),
             (r"^(?P<act>approve|decline|deny|reject) (request )?(?P<n>\d+|all)$", self.decide),
             (r"^(refresh|scan|update) plex( (library )?(?P<lib>.+))?$", self.refresh_plex),
             (r"^(indexers|check indexers|prowlarr)$", self.indexers),
@@ -1321,19 +1330,88 @@ class Assistant:
 
     # ------------------------------------------------------------ Overseerr
 
+    # ------------------------------------------------------------ watching, cleanup, family requests
+
+    def watch_cmd(self, m, kind: str = "any", minutes: int | None = None, genre: str | None = None) -> str:
+        from .media import insights
+        if not self.stack.plex:
+            return "Plex isn't set up, so I can't see your library."
+        return insights.describe_suggestions(insights.suggestions(self.stack, kind, minutes, genre))
+
+    def cleanup_cmd(self, m) -> str:
+        from .media import insights
+        try:
+            return insights.describe_cleanup(insights.cleanup(self.stack, self.cfg))
+        except LookupError as e:
+            return str(e)
+
+    def delete_media(self, kind: str, title: str) -> str:
+        from .media import insights
+        kind = KINDS.get(kind, kind)
+        if kind not in ("movie", "show"):
+            return "I can delete movies or shows."
+        self._arr(kind)
+        item = insights.find_in_library(self.stack, kind, title)
+        if not item:
+            return f"I can't find a {kind} called {title} in the library."
+        size = item.get("sizeOnDisk") or (item.get("statistics") or {}).get("sizeOnDisk") or 0
+        label = f"{item.get('title')}" + (f" ({item['year']})" if item.get("year") else "")
+        if not self.allow(f"Delete {label} and its files ({insights.gb(size)})? It won't be downloaded again automatically.", "destructive",
+                          doing=f"Delete {label}"):
+            return "Okay, kept it."
+        insights.delete_from_library(self.stack, kind, item)
+        from .audit import audit
+        audit(f"MEDIA DELETED: {kind} {label}, {insights.gb(size)}")
+        return f"Deleted {label}, freeing {insights.gb(size)}. Plex will drop it at its next scan."
+
+    def delete_media_cmd(self, m) -> str:
+        return self.delete_media(m["kind"], m.m["q"])
+
+    def keep_media(self, title: str) -> str:
+        from .media import insights
+        for kind in ("movie", "show"):
+            if self.stack.for_kind(kind) and (item := insights.find_in_library(self.stack, kind, title)):
+                ext = item.get("tmdbId") if kind == "movie" else item.get("tvdbId")
+                insights.keep(f"{kind}:{ext}", item.get("title"))
+                return f"I'll stop suggesting {item.get('title')} for cleanup."
+        return f"I can't find {title} in the library."
+
+    def keep_media_cmd(self, m) -> str:
+        return self.keep_media(m.m["q"])
+
+    def request_media(self, kind: str, title: str, who: str = "you") -> str:
+        from .media import insights
+        try:
+            return insights.add_request(self.stack, who or "you", KINDS.get(kind, kind), title)[1]
+        except LookupError as e:
+            return str(e)
+
+    def request_media_cmd(self, m) -> str:
+        return self.request_media(m["kind"], m.m["q"], (m.m["who"] or "you").strip())
+
     def requests(self, m) -> str:
-        o = self._need("overseerr", "Overseerr")
-        self.last_requests = o.pending()
-        if not self.last_requests:
+        from .media import insights
+        self.last_requests = []
+        lines = []
+        for r in insights.requests_list("pending"):
+            self.last_requests.append({"_jarvis": r["id"], "label": f"{r['title']} ({r['year'] or '?'})"})
+            lines.append(f"{len(self.last_requests)}. {r['title']} ({r['year'] or '?'}) [{r['kind']}], asked for by {r['who']}")
+        o = self.stack.overseerr
+        if o:
+            for r in o.pending():
+                self.last_requests.append(r)
+                lines.append(f"{len(self.last_requests)}. {o.title_of(r)} [{r.get('type', '?')}], requested by "
+                             f"{(r.get('requestedBy') or {}).get('displayName', '?')} (Overseerr)")
+        if not lines:
             return "No requests waiting for approval."
-        return "\n".join(f"{n}. {o.title_of(r)} [{r.get('type', '?')}], requested by "
-                         f"{(r.get('requestedBy') or {}).get('displayName', '?')}"
-                         for n, r in enumerate(self.last_requests, 1))
+        return "\n".join(lines) + "\nSay 'approve 1', 'decline 2' or 'approve all'."
 
     def decide(self, m) -> str:
-        o = self._need("overseerr", "Overseerr")
+        o = self.stack.overseerr
         if not self.last_requests:
-            return "Run 'requests' first so I know which one you mean."
+            self.requests(m)
+        if not self.last_requests:
+            return "No requests waiting for approval."
         approve = m["act"] == "approve"
         if m["n"] == "all":
             chosen = list(self.last_requests)
@@ -1342,13 +1420,19 @@ class Assistant:
             if not 1 <= n <= len(self.last_requests):
                 return f"There's no request {n}. I listed {len(self.last_requests)}."
             chosen = [self.last_requests[n - 1]]
-        names = ", ".join(o.title_of(r) for r in chosen)
+        names = ", ".join(r["label"] if "_jarvis" in r else o.title_of(r) for r in chosen)
         if not self.allow(f"{'Approve' if approve else 'Decline'} {names}?"):
             return "Okay, cancelled."
+        from .media import insights
+        out = []
         for r in chosen:
-            (o.approve if approve else o.decline)(r["id"])
+            if "_jarvis" in r:
+                out.append(insights.decide(self.stack, r["_jarvis"], approve))
+            else:
+                (o.approve if approve else o.decline)(r["id"])
+                out.append(f"{'Approved' if approve else 'Declined'} {o.title_of(r)} in Overseerr.")
             self.last_requests.remove(r)
-        return f"{'Approved' if approve else 'Declined'}: {names}."
+        return "\n".join(out)
 
     # ------------------------------------------------------------ Prowlarr
 

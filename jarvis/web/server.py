@@ -17,7 +17,8 @@ from pathlib import Path
 from flask import Flask, abort, g, jsonify, redirect, request, send_from_directory, session
 
 from .. import setup_schema as S
-from ..audit import AUDIT_LOG
+from .. import modes
+from ..audit import AUDIT_LOG, audit
 from ..collectors import build_collectors
 from ..commands import Assistant
 from ..config import env, load_config
@@ -198,6 +199,18 @@ class State:
                 if organizer.report_due("03:00", key="locprune"):
                     from .. import location
                     location.prune(keep)
+                if time.time() - getattr(self, "_media_ready_at", 0) > 600:
+                    self._media_ready_at = time.time()
+                    with self.lock:
+                        stack = self.stack
+                    if stack and (stack.arrs):
+                        from ..media import insights
+                        try:
+                            for title, text in insights.check_ready(stack):
+                                if p["ntfy"]:
+                                    notifier.send(title, text)
+                        except Exception as e:
+                            print(f"media requests: {e}")
                 if organizer.report_due(p["report_time"]):
                     text = self.build_report()
                     organizer.record("report", "Daily report", text)
@@ -693,6 +706,67 @@ def create_app(state: State, password: str | None) -> Flask:
             model = mail.local_model(state.cfg)
         return jsonify(messages=mail.recent(hours), accounts=accounts, states=mail.states(), local_model=model[1] if model else None,
                        packages=mail.packages(), subscriptions=mail.subscriptions())
+
+    # ------------------------------------------------------------ media: watch next, cleanup, requests
+
+    def _media_err(e):
+        return jsonify(ok=False, error=str(e) if isinstance(e, LookupError) else f"{type(e).__name__}: {e}"[:300])
+
+    @app.get("/api/media/watch")
+    def media_watch():
+        from ..media import insights
+        try:
+            mins = request.args.get("minutes")
+            return jsonify(ok=True, **insights.suggestions(state.stack, request.args.get("kind", "any"), int(mins) if mins else None,
+                                                           request.args.get("genre") or None, limit=12))
+        except Exception as e:
+            return _media_err(e)
+
+    @app.get("/api/media/cleanup")
+    def media_cleanup():
+        from ..media import insights
+        try:
+            with state.lock:
+                cfg = state.cfg
+            return jsonify(ok=True, **insights.cleanup(state.stack, cfg))
+        except Exception as e:
+            return _media_err(e)
+
+    @app.post("/api/media/keep")
+    def media_keep():
+        from ..media import insights
+        d = request.get_json(silent=True) or {}
+        insights.keep(str(d["key"]), str(d.get("title") or ""))
+        return jsonify(ok=True)
+
+    @app.get("/api/media/requests")
+    def media_requests():
+        from ..media import insights
+        return jsonify(requests=insights.recent_requests(30), can_request={k: bool(state.stack.for_kind(k)) for k in ("movie", "show")})
+
+    @app.post("/api/media/request")
+    def media_request_new():
+        from ..media import insights
+        d = request.get_json(silent=True) or {}
+        try:
+            rid, text = insights.add_request(state.stack, str(d.get("who") or "you")[:40], d.get("kind", "movie"), str(d.get("title", ""))[:120])
+            return jsonify(ok=True, id=rid, result=text)
+        except Exception as e:
+            return _media_err(e)
+
+    @app.post("/api/media/requests/<int:rid>")
+    def media_request_decide(rid):
+        """Approving adds the title to Radarr/Sonarr: a tap in the dashboard is the owner's OK."""
+        from ..media import insights
+        d = request.get_json(silent=True) or {}
+        if modes.get(state.cfg) == "read-only":
+            return jsonify(ok=False, error="Read-only mode is on.")
+        try:
+            text = insights.decide(state.stack, rid, bool(d.get("approve")))
+            audit(f"media request {rid}: {text}")
+            return jsonify(ok=True, result=text)
+        except Exception as e:
+            return _media_err(e)
 
     @app.post("/api/mail/package/<int:pid>/dismiss")
     def mail_package_dismiss(pid):

@@ -220,6 +220,7 @@ select.select, input[type=text], input[type=password], input[type=number], input
     <button data-view="dashboard" class="active"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 13h8V3H3v10zm0 8h8v-6H3v6zm10 0h8V11h-8v10zm0-18v6h8V3h-8z"/></svg><span>Dashboard</span></button>
     <button data-view="chat"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h16v12H7l-3 3V4z"/></svg><span>Chat</span></button>
     <button data-view="planner"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16v14H4zM4 10h16M8 3v5M16 3v5"/></svg><span>Planner</span></button>
+    <button data-view="media"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 5h18v12H3zM8 21h8M10 9l5 3-5 3z"/></svg><span>Media</span></button>
     <button data-view="places"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21s-7-6.2-7-11a7 7 0 0 1 14 0c0 4.8-7 11-7 11z"/><circle cx="12" cy="10" r="2.5"/></svg><span>Places</span></button>
     <button data-view="devices"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v10H4zM2 19h20M9 15v4M15 15v4"/></svg><span>Devices</span></button>
     <button data-view="activity"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg><span>Activity</span></button>
@@ -275,6 +276,15 @@ select.select, input[type=text], input[type=password], input[type=number], input
           <div class="card" id="notescard"></div>
           <div class="card" id="feedcard" style="margin-top:12px"></div>
         </div>
+      </div>
+    </section>
+
+    <section id="media" hidden>
+      <h1>Media</h1>
+      <p class="sub">What to watch next from your own library, requests waiting for your OK, and what could go to free up space.</p>
+      <div class="planner-grid">
+        <div><div class="card" id="watchcard"></div></div>
+        <div><div class="card" id="requestscard"></div><div class="card" id="cleanupcard" style="margin-top:12px"></div></div>
       </div>
     </section>
 
@@ -364,7 +374,7 @@ function show(view) {
   current = view;
   document.querySelectorAll("nav button[data-view]").forEach(b => b.classList.toggle("active", b.dataset.view === view));
   document.querySelectorAll("main > section").forEach(s => s.hidden = s.id !== view);
-  ({ dashboard: loadStatus, devices: loadDevices, planner: loadPlanner, places: loadPlaces, activity: loadActivity, setup: loadSetup, chat: () => { $("#input").focus(); loadPending(); } })[view]();
+  ({ dashboard: loadStatus, media: loadMedia, devices: loadDevices, planner: loadPlanner, places: loadPlaces, activity: loadActivity, setup: loadSetup, chat: () => { $("#input").focus(); loadPending(); } })[view]();
   try { localStorage.setItem("jarvis.view", view); } catch {}
 }
 document.querySelectorAll("nav button[data-view]").forEach(b => b.onclick = () => show(b.dataset.view));
@@ -1161,6 +1171,81 @@ async function loadMail() {
     Object.keys(counts).length ? el("p", { class: "help", style: "margin-top:10px" }, "Everything else: " + Object.entries(counts).sort((a, b) => b[1] - a[1]).map(([c, n]) => `${n} ${c}`).join(", ")) : null,
     !d.messages.length ? el("p", { class: "help" }, "No new mail screened yet. It checks every 15 minutes, or press Check now.") : null);
 }
+/* ---------- media ---------- */
+const mediaOpts = { kind: "any", minutes: "", genre: "" };
+async function loadMedia() { loadWatch(); loadRequests(); loadCleanup(); }
+async function loadWatch() {
+  const card = $("#watchcard");
+  put(card, el("strong", {}, "Watch next"), el("p", { class: "help" }, "Looking through your library..."));
+  const q = new URLSearchParams({ kind: mediaOpts.kind, minutes: mediaOpts.minutes, genre: mediaOpts.genre });
+  const d = await api("/api/media/watch?" + q);
+  const kind = el("select", { style: "width:auto" }, ["any", "movie", "show"].map(k => el("option", { value: k }, { any: "Anything", movie: "Movies", show: "Shows" }[k])));
+  kind.value = mediaOpts.kind;
+  const mins = el("select", { style: "width:auto" }, [["", "Any length"], ["30", "≤ 30 min"], ["60", "≤ 1 hour"], ["100", "≤ 100 min"], ["130", "≤ 2h 10"]].map(([v, t]) => el("option", { value: v }, t)));
+  mins.value = mediaOpts.minutes;
+  const genre = el("input", { placeholder: "Genre (optional)", value: mediaOpts.genre, style: "width:auto;flex:1 1 120px" });
+  const go = () => { mediaOpts.kind = kind.value; mediaOpts.minutes = mins.value; mediaOpts.genre = genre.value.trim(); loadWatch(); };
+  kind.onchange = mins.onchange = go; genre.onchange = go;
+  const controls = el("div", { class: "row", style: "gap:6px;flex-wrap:wrap;margin:6px 0" }, kind, mins, genre);
+  if (!d.ok) { put(card, el("strong", {}, "Watch next"), el("p", { class: "help" }, d.error)); return; }
+  const row = (title, sub, dot) => el("div", { class: "item" }, el("span", { class: "dot " + dot }), el("div", { class: "grow" }, el("div", {}, title), el("div", { class: "when" }, sub)));
+  put(card, el("strong", {}, "Watch next"), controls,
+    d.taste.length ? el("p", { class: "help", style: "margin:0 0 6px" }, "Lately you've been watching " + d.taste.join(", ") + ".") : null,
+    d.continue.length ? [el("div", { class: "day-head" }, "Carry on"), d.continue.map(c => row(c.title, c.why + (c.minutes ? ` · ${c.minutes} min left` : ""), "k-event"))] : null,
+    d.picks.length ? [el("div", { class: "day-head" }, "Something new"), d.picks.map(p => row(p.title,
+      [(p.genres || []).join(", "), p.minutes ? `${p.minutes} min${p.kind === "show" ? " episodes" : ""}` : "", p.rating ? `rated ${Number(p.rating).toFixed(1)}` : "", p.why || ""].filter(Boolean).join(" · "),
+      p.kind === "show" ? "k-reminder" : "k-bill"))] : null,
+    !d.continue.length && !d.picks.length ? el("p", { class: "help" }, "Nothing unwatched fits. Try another length or genre.") : null);
+}
+async function loadRequests() {
+  const card = $("#requestscard");
+  const d = await api("/api/media/requests");
+  const who = el("input", { placeholder: "For (name)", style: "width:auto;flex:0 1 110px" });
+  const title = el("input", { placeholder: "Movie or show title", style: "flex:1 1 160px" });
+  const kind = el("select", { style: "width:auto" }, el("option", { value: "movie" }, "Movie"), el("option", { value: "show" }, "Show"));
+  const add = el("button", { class: "btn" }, "Request");
+  const note = el("p", { class: "help", style: "margin:4px 0" });
+  add.onclick = async () => {
+    if (!title.value.trim()) return;
+    add.disabled = true;
+    const r = await api("/api/media/request", { kind: kind.value, title: title.value, who: who.value || "you" });
+    note.textContent = r.ok ? r.result : r.error; add.disabled = false; if (r.ok) { title.value = ""; loadRequests(); }
+  };
+  const decide = async (id, approve) => { const r = await api(`/api/media/requests/${id}`, { approve }); if (!r.ok) alert(r.error); loadRequests(); };
+  const label = { pending: "waiting for you", approved: "approved, downloading", declined: "declined", ready: "ready to watch" };
+  const rows = d.requests.map(r => el("div", { class: "item" }, el("span", { class: "dot " + (r.status === "pending" ? "k-overdue" : r.status === "ready" ? "k-event" : "k-bill") }),
+    el("div", { class: "grow" }, el("div", {}, `${r.title} (${r.year || "?"})`), el("div", { class: "when" }, `${r.kind} · for ${r.who} · ${label[r.status] || r.status}`)),
+    r.status === "pending" ? el("div", { class: "acts" }, el("button", { class: "btn", onclick: () => decide(r.id, true) }, "Approve"),
+      el("button", { class: "btn", onclick: () => decide(r.id, false) }, "Decline")) : null));
+  const canAsk = d.can_request.movie || d.can_request.show;
+  put(card, el("strong", {}, "Requests"),
+    el("p", { class: "help", style: "margin:4px 0 6px" }, "Family asks, you approve, and everyone hears when it's ready. Overseerr requests show up in chat: say 'requests'."),
+    canAsk ? el("div", { class: "row", style: "gap:6px;flex-wrap:wrap" }, kind, title, who, add) : el("p", { class: "help" }, "Needs Radarr or Sonarr in Setup."),
+    note, rows.length ? rows : el("p", { class: "help" }, "No requests in the last 30 days."));
+}
+async function loadCleanup() {
+  const card = $("#cleanupcard");
+  const btn = el("button", { class: "btn" }, "Find space to free");
+  btn.onclick = async () => {
+    btn.disabled = true; btn.textContent = "Looking...";
+    const d = await api("/api/media/cleanup");
+    if (!d.ok) { put(card, el("strong", {}, "Clean up"), el("p", { class: "help" }, d.error)); return; }
+    const gb = n => { n = n / 1e9; return n >= 10 ? `${Math.round(n)} GB` : `${n.toFixed(1)} GB`; };
+    const keep = async x => { await api("/api/media/keep", { key: x.key, title: x.title }); btn.disabled = false; btn.click(); };
+    const del = x => { show("chat"); send(`delete ${x.kind} ${x.title.replace(/ \(\d{4}\)$/, "")}`); };
+    put(card, el("div", { class: "row", style: "justify-content:space-between" }, el("strong", {}, "Clean up"), btn),
+      el("p", { class: "help", style: "margin:4px 0 6px" }, d.items.length ? `${d.items.length} could go, about ${gb(d.total)}. Watched over ${d.watched_days} days ago, or never watched after ${d.unwatched_days} days.` : "Nothing big stands out."),
+      d.items.slice(0, 40).map(x => el("div", { class: "item" }, el("span", { class: "dot k-bill" }),
+        el("div", { class: "grow" }, el("div", {}, `${x.title} · ${gb(x.size)}`), el("div", { class: "when" }, `${x.kind} · ${x.why}`)),
+        el("div", { class: "acts" }, el("button", { class: "btn", title: "Never suggest this", onclick: () => keep(x) }, "Keep"),
+          el("button", { class: "btn", title: "Delete it with its files (asks in Chat first)", onclick: () => del(x) }, "Delete…")))),
+      el("p", { class: "help" }, "Watched means watched on the Plex account Jarvis uses. Delete always asks first, in Chat."));
+    btn.disabled = false; btn.textContent = "Look again";
+  };
+  put(card, el("div", { class: "row", style: "justify-content:space-between" }, el("strong", {}, "Clean up"), btn),
+    el("p", { class: "help", style: "margin:4px 0 0" }, "Finds big movies and shows watched long ago, never watched, or ended and finished. Suggestions only."));
+}
+
 function renderFeed() {
   const card = $("#feedcard");
   const url = location.origin + plan.feed;

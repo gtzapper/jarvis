@@ -200,6 +200,30 @@ class JarvisViewModel(app: Application) : AndroidViewModel(app) {
     var life by mutableStateOf<JSONObject?>(null)
         private set
 
+    // ---- media: watch next and family requests
+    var watch by mutableStateOf<JSONObject?>(null)
+        private set
+    var mediaRequests by mutableStateOf<JSONObject?>(null)
+        private set
+    var mediaNote by mutableStateOf<String?>(null)
+
+    fun loadMedia() = viewModelScope.launch {
+        io { api.get("/api/media/watch") }?.let { watch = it }
+        io { api.get("/api/media/requests") }?.let { mediaRequests = it }
+    }
+
+    fun requestMedia(kind: String, title: String, who: String) = viewModelScope.launch {
+        val r = io { api.post("/api/media/request", JSONObject().put("kind", kind).put("title", title).put("who", who.ifBlank { "you" })) }
+        mediaNote = r?.let { if (it.optBoolean("ok")) it.optString("result") else it.optString("error") } ?: "Couldn't reach Jarvis."
+        io { api.get("/api/media/requests") }?.let { mediaRequests = it }
+    }
+
+    fun decideMedia(id: Int, approve: Boolean) = viewModelScope.launch {
+        val r = io { api.post("/api/media/requests/$id", JSONObject().put("approve", approve)) }
+        mediaNote = r?.let { if (it.optBoolean("ok")) it.optString("result") else it.optString("error") }
+        io { api.get("/api/media/requests") }?.let { mediaRequests = it }
+    }
+
     fun lifeAction(path: String, body: JSONObject = JSONObject()) = viewModelScope.launch {
         io { api.post(path, body) }
         io { api.get("/api/life") }?.let { life = it }

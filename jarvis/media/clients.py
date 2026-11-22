@@ -91,8 +91,8 @@ class ArrClient(Service):
     def _root_folder(self) -> str:
         return self.cfg.get("root_folder") or self.get("/rootfolder")[0]["path"]
 
-    def add(self, item: dict) -> None:
-        self.post(self.add_path, self.build_add(item))
+    def add(self, item: dict) -> dict | None:
+        return self.post(self.add_path, self.build_add(item))
 
     def build_add(self, item: dict) -> dict:
         raise NotImplementedError

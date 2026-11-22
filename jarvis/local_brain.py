@@ -24,6 +24,9 @@ def _plain(text: str | None) -> str:
     text = THINK_TAGS.sub("", text or "")
     text = re.sub(r"\*\*(.+?)\*\*", r"\1", text)
     text = re.sub(r"(?m)^#{1,6}\s+", "", text)
+    text = re.sub(r"(?<!\*)\*([^*\n]+)\*(?!\*)", r"\1", text)  # *italics*
+    # non-breaking hyphens and spaces (gpt-oss loves them) break search, speech and some fonts
+    text = text.translate(str.maketrans({c: "-" for c in "‐‑‒−"} | {c: " " for c in "    "}))
     return text.strip()
 
 
