@@ -691,7 +691,7 @@ function renderStart() {
     ["Create Jarvis's SSH key", !!s.ssh_public_key, () => $("#sshcard").scrollIntoView({ behavior: "smooth", block: "center" })],
     ["Connect Proxmox", has("proxmox"), () => openService("proxmox")],
     ["Connect pfSense", has("pfsense"), () => openService("pfsense")],
-    ["Add your VMs or Unraid", has("linux_hosts") || has("unraid"), () => openService("linux_hosts")],
+    ["Add your VMs or Unraid", has("linux_hosts") || has("unraid"), () => has("proxmox") ? goDiscover() : openService("linux_hosts")],
     ["Set up the AI brain", has("ai"), () => openService("ai")],
     ["Set a dashboard password", !!(web && web.password_env && web.password_env.set), () => openService("web")],
   ];
@@ -745,6 +745,10 @@ function openService(id, keepScroll = false) {
       const add = el("button", { class: svc.entries.length ? "btn" : "btn primary", onclick: () => add.replaceWith(entryForm(svc, null, null)) }, label);
       body.append(svc.entries.length ? add : entryForm(svc, null, null));
     }
+    if (svc.id === "proxmox" && svc.entries.length) body.append(el("div", { class: "entry" },
+      el("strong", {}, "Next: add your VMs and containers"),
+      el("p", { class: "help", style: "margin:4px 0 10px" }, "Jarvis already watches every guest's status and CPU through Proxmox. To also see disk and memory inside each one and run commands on it, add it as a server: the scan finds each guest's IP and adds it with one click."),
+      el("button", { class: "btn primary", onclick: () => { dlg.close(); goDiscover(); } }, "Find and add VMs and containers")));
   }
   put(dlg,
     el("div", { class: "sheet-head" }, svcIcon(svc.id),
@@ -1368,6 +1372,10 @@ async function applyUpdate(btn, result, action) {
     await new Promise(res => setTimeout(res, 2000));
   }
   result.className = "result bad"; result.textContent = "Jarvis hasn't come back after 2 minutes. Check: docker logs jarvis";
+}
+function goDiscover() {
+  $("#discovercard").scrollIntoView({ behavior: "smooth", block: "start" });
+  scanProxmox();
 }
 function renderDiscoverIntro() {
   put($("#discovercard"), el("strong", {}, "Discovered on Proxmox"),

@@ -55,7 +55,8 @@ def _t_proxmox(cfg, e):
         vms += sum(1 for g in pve._get(f"/nodes/{n['node']}/qemu") if not g.get("template"))
         cts += sum(1 for g in pve._get(f"/nodes/{n['node']}/lxc") if not g.get("template"))
     return (f"Connected to Proxmox {v.get('version', '?')}: {', '.join(n['node'] for n in nodes) or 'no online nodes'}, "
-            f"{vms} VM{'s' * (vms != 1)} and {cts} container{'s' * (cts != 1)}")
+            f"{vms} VM{'s' * (vms != 1)} and {cts} container{'s' * (cts != 1)}. To add them to Jarvis, press "
+            f"'Find and add VMs and containers' below")
 
 
 def _t_pfsense(cfg, e):
@@ -142,6 +143,16 @@ def _t_signal(cfg, e):
         raise RuntimeError(f"{b.s['number']} isn't linked yet. Save, then open /api/setup/signal/qr on your Jarvis address in a "
                            "new tab and scan it in Signal: Settings > Linked devices > Link new device")
     return f"Signal works as {b.s['number']}. Each person links their Signal under their name in the menu > Chat apps"
+
+
+def _t_updates(cfg, e):
+    from . import updater
+    try:
+        r = updater.check()
+    except updater.UpdateError as ex:
+        raise RuntimeError(str(ex)) from None
+    n = len(r["new"])
+    return f"GitHub is reachable. Running {r['commit']} ({r['date']}); " + (f"{n} update{'s' * (n != 1)} waiting" if n else "up to date")
 
 
 def _t_location(cfg, e):
@@ -465,7 +476,7 @@ SERVICES: list[Service] = [
                     Field("default_auth", "Default login", "choice", default="key", options=["key", "password"]),
                     Field("default_password_env", "Default password", "secret", env="DISCOVERY_PASSWORD",
                           help="Tried on guests when you add them with password login and no password typed")]),
-    Service("updates", "Updates", "Jarvis", ("updates",),
+    Service("updates", "Updates", "Jarvis", ("updates",), test=_t_updates,
             help="Jarvis updates itself from its GitHub repo (the button at the top of this page). For a private repo, create a "
                  "fine-grained GitHub token with read-only 'Contents' access to that one repo and paste it here.",
             fields=[Field("token_env", "GitHub token (private repos only)", "secret", env="JARVIS_GIT_TOKEN")]),
